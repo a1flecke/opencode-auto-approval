@@ -37,24 +37,36 @@ linted with zizmor, default `GITHUB_TOKEN` permissions denied):
   check of exactly what the npm tarball contains, and dependency review on PRs.
   A single `required` job aggregates them and is the branch-protection check.
 - `codeql.yml` — CodeQL on PRs, `main`, and weekly.
-- `release.yml` — runs only for a `vX.Y.Z` tag that matches `package.json` and
-  is on `main`. It re-runs the checks, packs the tarball once, attests build provenance, creates a **draft**
-  GitHub release with the tarball and its `.sha256`, publishes the package to
-  GitHub Packages, and publishes the release **last**.
+- `release.yml` — on every push to `main`, re-runs the checks, then runs
+  [semantic-release](https://github.com/semantic-release/semantic-release) over
+  the Conventional Commits since the last tag. If any is releasable it tags the
+  commit, packs the tarball once, creates a **draft** GitHub release with the
+  tarball, attests build provenance, publishes the package to GitHub Packages,
+  and publishes the release **last**. No manual approval step.
+- `commit-messages` (in `ci.yml`) — every commit in a PR must be a Conventional
+  Commit, because rebase merges keep each commit on `main`.
 
 **Immutability.** Once published, a release's tag and assets are locked by
 GitHub's immutable-releases setting; a ruleset blocks moving, deleting, or
 creating `v*` tags except by admins; the workflow refuses to touch an existing
 release; and a package version that already exists is never republished.
 Verify a download with
-`gh attestation verify <tarball> --repo <owner>/<repo>` and the `.sha256` file.
+`gh attestation verify <tarball> --repo <owner>/<repo>`.
 To fix a bad release, ship a new version; never rewrite the old one.
 
 **Before pushing:** run `sh scripts/setup-git-hooks.sh` once per clone; the tracked `pre-push` hook then runs `scripts/verify-before-push.sh` (private-content scan, package check, tests).
 
-**Cutting a release:** bump `version` in `package.json` through a PR, merge it,
-then push the tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`). The
-release then runs automatically; there is no manual approval step.
+**Releasing is automatic.** Write commits as `type(scope): summary`. `feat`
+releases a minor version, `fix` and `perf` a patch, and a `BREAKING CHANGE:`
+footer a major one (do not use `!`; the default parser ignores it and CI
+rejects it). `docs`, `test`, `ci`, `chore`, `refactor`, `build`, and `style`
+release nothing. Merging such a PR to `main` is the whole release. The
+`version` in `package.json` is a placeholder in git; the real version is
+stamped into the released tarball and the tag, never committed. The
+repository's tag ruleset must list the GitHub Actions app as a bypass actor so
+the workflow can push the tag. If the publish step fails after the tag and
+draft release exist, fix the cause and publish the draft by hand, or land a
+new `fix` commit.
 
 **Repository settings** are code: after the first push of `main`, run
 `bash scripts/configure-repo.sh OWNER/REPO` (admin `gh` auth required). It

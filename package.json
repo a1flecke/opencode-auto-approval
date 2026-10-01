@@ -24,5 +24,8 @@
     "git-metadata.ts",
     "README.md",
     "TRUSTED-WORKTREE-DESIGN.md"
-  ]
+  ],
+  "devDependencies": {
+    "semantic-release": "25.0.9"
+  }
 }

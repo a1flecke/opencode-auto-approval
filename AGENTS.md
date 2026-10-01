@@ -91,7 +91,12 @@ loosen it to get a change through.
   asks. A security fix needs a regression test that fails without the fix.
 - **Keep docs honest.** If behavior or a setting changes, update `README.md` (and
   `TRUSTED-WORKTREE-DESIGN.md` for preflight changes) in the same PR.
-- **Small, reviewable commits** with a message explaining *why*.
+- **Small, reviewable commits** with a message explaining *why*, as a
+  Conventional Commit (`feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert`,
+  optional `(scope)`, then `: summary`). semantic-release derives the version
+  and cuts the release from these on merge to `main`, so the type matters: `feat`
+  = minor, `fix`/`perf` = patch, a `BREAKING CHANGE:` footer = major (never `!`).
+  CI rejects non-conforming commits.
 - **Never skip checks.** No `--no-verify`, no disabling or editing hooks or
   workflows to make something pass, no `git push --force`. If a check blocks you,
   fix the cause or ask the maintainer.
