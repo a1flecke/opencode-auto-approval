@@ -216,6 +216,68 @@ function isSafeStagePath(path: string): boolean {
   return !SECRET_PATH.test(path);
 }
 
+/** Splits on whitespace, honoring plain '...' and "..." quotes. Backslashes and unbalanced quotes yield null. */
+function shellWords(command: string): string[] | null {
+  if (command.includes("\\")) return null;
+  const words: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let started = false;
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) words.push(current);
+      current = "";
+      started = false;
+    } else {
+      current += ch;
+      started = true;
+    }
+  }
+  if (quote) return null;
+  if (started) words.push(current);
+  return words;
+}
+
+/**
+ * `gh pr create` for the current feature branch against a default branch.
+ * Metadata flags (--title/--body/--body-file/--fill/--draft) are accepted, each
+ * at most once; anything that changes the target (--repo, --web, reviewers,
+ * --head/--base other than the exact trusted values) asks.
+ */
+function prCreateDecision(command: string, metadata: WorktreeMetadata, options: TrustedWorkflowOptions): WorkflowDecision {
+  const category = "create-pull-request";
+  const words = shellWords(command);
+  const fail = ask(category, "Only a pull request from the current feature branch to the default branch, with --title/--body/--body-file/--fill/--draft, is automatic.");
+  if (!words || isDefaultBranch(metadata.branch, options)) return fail;
+  const seen = new Set<string>();
+  for (let i = 3; i < words.length; i += 1) {
+    const flag = words[i];
+    if (seen.has(flag)) return fail;
+    seen.add(flag);
+    if (flag === "--fill" || flag === "--draft") continue;
+    const value = words[i + 1];
+    if (value === undefined) return fail;
+    i += 1;
+    if (flag === "--base") {
+      if (!options.defaultBranches.includes(value)) return fail;
+    } else if (flag === "--head") {
+      if (value !== metadata.branch) return fail;
+    } else if (flag === "--body-file") {
+      if (!isSafeStagePath(value)) return fail;
+    } else if (flag !== "--title" && flag !== "--body") {
+      return fail;
+    }
+  }
+  if (!seen.has("--base") || !seen.has("--head")) return fail;
+  return { kind: "allow", category, reason: "A pull request is being created for the current feature branch." };
+}
+
 function commandFamily(command: string, metadata: WorktreeMetadata, options: TrustedWorkflowOptions): WorkflowDecision {
   if (command === "./scripts/run-with-mise.sh yarn install") {
     return hasChangedInstallInputs(metadata)
@@ -313,16 +375,7 @@ function commandFamily(command: string, metadata: WorktreeMetadata, options: Tru
   }
 
   if (tokens[0] === "gh" && tokens[1] === "pr" && tokens[2] === "create") {
-    const valid =
-      tokens.length === 8 &&
-      tokens[3] === "--base" &&
-      options.defaultBranches.includes(tokens[4]) &&
-      tokens[5] === "--head" &&
-      tokens[6] === metadata.branch &&
-      tokens[7] === "--fill";
-    return valid && !isDefaultBranch(metadata.branch, options)
-      ? { kind: "allow", category: "create-pull-request", reason: "A pull request is being created for the current feature branch." }
-      : ask("create-pull-request", "Only a filled pull request from the current feature branch to main or master is automatic.");
+    return prCreateDecision(command, metadata, options);
   }
 
   return { kind: "unrecognized" };
