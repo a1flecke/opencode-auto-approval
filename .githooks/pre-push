@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks a push unless the canonical verification passes.
+exec "$(git rev-parse --show-toplevel)/scripts/verify-before-push.sh"

@@ -1,8 +1,28 @@
 {
-  "name": "model-approval",
-  "version": "1.0.0",
-  "private": true,
+  "name": "@a1flecke/opencode-auto-approval",
+  "version": "0.1.0",
   "type": "module",
   "main": "index.ts",
-  "description": "Local model-reviewed permission plugin for OpenCode V2. Contextually arbitrates 'ask' permission checks and re-reviews a narrow sensitive-even-if-allowed class, falling back to human approval on any doubt or failure."
+  "description": "Local model-reviewed permission plugin for OpenCode V2. Contextually arbitrates 'ask' permission checks and re-reviews a narrow sensitive-even-if-allowed class, falling back to human approval on any doubt or failure.",
+  "scripts": {
+    "test": "bun test"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/a1flecke/opencode-auto-approval.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "index.ts",
+    "policy.ts",
+    "reviewer.ts",
+    "trusted-worktree.ts",
+    "workflow-preflight.ts",
+    "git-metadata.ts",
+    "README.md",
+    "TRUSTED-WORKTREE-DESIGN.md"
+  ]
 }

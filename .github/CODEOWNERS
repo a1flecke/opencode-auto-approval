@@ -1,0 +1,7 @@
+* @a1flecke
+
+# The approval policy and the pipeline that ships it need an explicit owner review.
+/.github/ @a1flecke
+/scripts/ @a1flecke
+/mise.toml @a1flecke
+/package.json @a1flecke
