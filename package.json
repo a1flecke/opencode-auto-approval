@@ -1,6 +1,6 @@
 {
   "name": "@a1flecke/opencode-auto-approval",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "index.ts",
   "description": "Local model-reviewed permission plugin for OpenCode V2. Contextually arbitrates 'ask' permission checks and re-reviews a narrow sensitive-even-if-allowed class, falling back to human approval on any doubt or failure.",

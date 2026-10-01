@@ -159,7 +159,9 @@ jobs:
             echo "$PACKAGE_NAME@$VERSION is already published; leaving it untouched."
             exit 0
           fi
-          npm publish "dist/$TARBALL" --registry "$registry" --userconfig "$RUNNER_TEMP/.npmrc"
+          # The leading ./ matters: without it npm reads "dist/<file>.tgz" as the
+          # GitHub shorthand owner/repo and tries to clone it over SSH.
+          npm publish "./dist/$TARBALL" --registry "$registry" --userconfig "$RUNNER_TEMP/.npmrc"
 
       # Publishing the release is the last step. With immutable releases
       # enabled this locks the tag and all assets permanently.
