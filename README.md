@@ -9,7 +9,8 @@ marketplace plugin.
 
 There is no build step and no runtime dependencies.
 
-1. Clone this repository anywhere outside the projects your agents work in.
+1. Clone this repository anywhere outside the projects your agents work in, then run
+   `mise install` (bun is pinned in `mise.toml`; use mise, not a global bun).
 2. Register it by path in `~/.config/opencode/opencode.jsonc` (see
    [Configuration](#configuration)). Set `trustedRoots` explicitly: the
    built-in default is an empty list, so without it the deterministic
@@ -17,13 +18,54 @@ There is no build step and no runtime dependencies.
 3. Restart the OpenCode service.
 
 To update: `git pull` (or check out a tag), then restart OpenCode. Run
-`bun test` before restarting after any local change. Keep your machine-specific
+`mise run test` before restarting after any local change. Keep your machine-specific
 values (`trustedRoots`, model, key variable name) in your OpenCode config, never
 in this repository.
 
 Because this plugin decides what your agents may run, keep the clone out of any
 path your agents may edit: add an `edit` deny for its directory in your OpenCode
 permissions so changes come only from you.
+
+## Releasing and repository security
+
+Maintainer-facing; none of this affects using the plugin.
+
+**Pipeline** (`.github/workflows/`, every action pinned by commit SHA, workflows
+linted with zizmor, default `GITHUB_TOKEN` permissions denied):
+
+- `ci.yml` — workflow lint, tests (`mise run test`), a private-content scan, a
+  check of exactly what the npm tarball contains, and dependency review on PRs.
+  A single `required` job aggregates them and is the branch-protection check.
+- `codeql.yml` — CodeQL on PRs, `main`, and weekly.
+- `release.yml` — runs only for a `vX.Y.Z` tag that matches `package.json` and
+  is on `main`. It re-runs the checks, packs the tarball once, waits for approval
+  on the `release` environment, attests build provenance, creates a **draft**
+  GitHub release with the tarball and its `.sha256`, publishes the package to
+  GitHub Packages, and publishes the release **last**.
+
+**Immutability.** Once published, a release's tag and assets are locked by
+GitHub's immutable-releases setting; a ruleset blocks moving, deleting, or
+creating `v*` tags except by admins; the workflow refuses to touch an existing
+release; and a package version that already exists is never republished.
+Verify a download with
+`gh attestation verify <tarball> --repo <owner>/<repo>` and the `.sha256` file.
+To fix a bad release, ship a new version; never rewrite the old one.
+
+**Before pushing:** run `sh scripts/setup-git-hooks.sh` once per clone; the tracked `pre-push` hook then runs `scripts/verify-before-push.sh` (private-content scan, package check, tests).
+
+**Cutting a release:** bump `version` in `package.json` through a PR, merge it,
+then push the tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`) and
+approve the `release` environment deployment.
+
+**Repository settings** are code: after the first push of `main`, run
+`bash scripts/configure-repo.sh OWNER/REPO` (admin `gh` auth required). It
+enforces PR-only changes to `main` with one code-owner approval, stale-review
+dismissal, last-push approval, resolved conversations, linear history,
+rebase-only merges, required `required` + `analyze` checks, no force-push or
+deletion, secret scanning with push protection, Dependabot alerts and updates,
+private vulnerability reporting, read-only default token permissions, SHA-pinned
+actions required, and the `release` environment. Admins may bypass the approval
+requirement only through a pull request.
 
 ## Why this exists
 
@@ -273,7 +315,7 @@ reviewer outage from a genuine safety prompt.
 
 ```bash
 cd ~/.config/opencode/plugins/model-approval
-mise exec bun@1.4.2 -- bun test
+mise run test
 ```
 
 The tests cover options validation, all five required Jev answers, threshold

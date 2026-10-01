@@ -1,0 +1,167 @@
+name: Release
+
+# Releases are cut only by pushing a vMAJOR.MINOR.PATCH tag. Tag creation is
+# restricted by a repository ruleset (see scripts/configure-repo.sh), the
+# `release` environment requires an approval, and the GitHub release is
+# published last so that GitHub's immutable-releases setting locks the tag and
+# every asset the moment it goes public.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify-and-build:
+    name: verify-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      package-name: ${{ steps.meta.outputs.name }}
+      version: ${{ steps.meta.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned tools (mise.toml)
+        uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install: true
+          cache: false
+
+      - name: Verify tag matches package version and is on main
+        id: meta
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(jq -r .version package.json)"
+          name="$(jq -r .name package.json)"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "Tag $TAG does not match package.json version $version" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tagged commit $GITHUB_SHA is not on origin/main" >&2
+            exit 1
+          fi
+          {
+            echo "name=$name"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: mise run test
+
+      - name: Block machine-specific or private content
+        run: bash scripts/check-private-content.sh
+
+      - name: Verify the published tarball contents
+        run: bash scripts/check-package-contents.sh
+
+      - name: Pack
+        id: pack
+        run: |
+          mkdir -p dist
+          tarball="$(mise exec -- npm pack --json --pack-destination dist | jq -r '.[0].filename')"
+          sha256="$(sha256sum "dist/$tarball" | cut -d' ' -f1)"
+          echo "$sha256  $tarball" > "dist/$tarball.sha256"
+          {
+            echo "tarball=$tarball"
+            echo "sha256=$sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Manual approval gate; restricted to v* tags by configure-repo.sh.
+    environment: release
+    permissions:
+      contents: write       # create the release
+      packages: write       # publish to GitHub Packages
+      id-token: write       # build provenance attestation
+      attestations: write   # store the provenance attestation
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      PACKAGE_NAME: ${{ needs.verify-and-build.outputs.package-name }}
+      VERSION: ${{ needs.verify-and-build.outputs.version }}
+      TARBALL: ${{ needs.verify-and-build.outputs.tarball }}
+      EXPECTED_SHA256: ${{ needs.verify-and-build.outputs.sha256 }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Confirm the tarball is the one that was verified
+        run: |
+          actual="$(sha256sum "dist/$TARBALL" | cut -d' ' -f1)"
+          if [[ "$actual" != "$EXPECTED_SHA256" ]]; then
+            echo "Tarball digest changed between jobs" >&2
+            exit 1
+          fi
+
+      - name: Refuse to touch an existing release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists; releases are never overwritten." >&2
+            exit 1
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.verify-and-build.outputs.tarball }}
+
+      # Draft first: assets are attached while the release is still mutable.
+      - name: Create draft release with assets
+        run: |
+          gh release create "$TAG" \
+            "dist/$TARBALL" "dist/$TARBALL.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "$TAG" \
+            --generate-notes
+
+      - name: Publish to GitHub Packages (skipped if this version already exists)
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          registry="https://npm.pkg.github.com"
+          cat > "$RUNNER_TEMP/.npmrc" <<'NPMRC'
+          //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+          NPMRC
+          if npm view "$PACKAGE_NAME@$VERSION" version --registry "$registry" --userconfig "$RUNNER_TEMP/.npmrc" >/dev/null 2>&1; then
+            echo "$PACKAGE_NAME@$VERSION is already published; leaving it untouched."
+            exit 0
+          fi
+          npm publish "dist/$TARBALL" --registry "$registry" --userconfig "$RUNNER_TEMP/.npmrc"
+
+      # Publishing the release is the last step. With immutable releases
+      # enabled this locks the tag and all assets permanently.
+      - name: Publish the release
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
