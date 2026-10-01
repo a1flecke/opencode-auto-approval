@@ -138,7 +138,7 @@ export async function evaluateTrustedWorktreeCommand(
   if (event.action !== "shell") return { kind: "unrecognized" };
   const processCheck = evaluateRoutineProcessCheck(event.resources);
   if (processCheck.kind !== "unrecognized") return processCheck;
-  const candidates = event.resources.filter(isTrustedWorkflowCandidate);
+  const candidates = event.resources.filter((command) => isTrustedWorkflowCandidate(command, options));
   if (candidates.length === 0) return { kind: "unrecognized" };
   if (event.resources.length !== candidates.length) {
     return ask("command-shape", "Automatic workflow approval cannot mix workflow commands with other shell operations.");
@@ -149,7 +149,13 @@ export async function evaluateTrustedWorktreeCommand(
     const messages = (await ctx.session?.context?.({ sessionID: event.sessionID })) ?? [];
     const directory = resolveWorkflowDirectory(event, info, messages);
     if (!directory) return ask("trusted-worktree", "Could not resolve the session worktree for automatic approval.");
-    const metadata = await loadWorktreeMetadata(directory, runBunReadOnly, bunPathExists);
+    const metadata = await loadWorktreeMetadata(
+      directory,
+      runBunReadOnly,
+      bunPathExists,
+      undefined,
+      options.trustedScripts ?? [],
+    );
     if (!metadata) return ask("trusted-worktree", "Could not verify this session as a trusted Git worktree.");
     return evaluateTrustedWorkflowBatch(candidates, metadata, options);
   } catch {

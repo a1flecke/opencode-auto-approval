@@ -163,7 +163,8 @@ Registered in `~/.config/opencode/opencode.jsonc`:
       "debug": false,
       "trustedRoots": ["/home/user/dev"],
       "trustedRemoteHosts": ["github.com"],
-      "defaultBranches": ["main", "master"]
+      "defaultBranches": ["main", "master"],
+      "trustedScripts": ["scripts/check-src-rule-violations.sh"]
     }
   }
 ]
@@ -198,6 +199,35 @@ Registered in `~/.config/opencode/opencode.jsonc`:
   local trust boundary for deterministic workflow approval. The defaults are
   the personal development directory, `github.com`, and `main`/`master`.
   An empty or malformed override falls back to those conservative defaults.
+- `trustedScripts` — exact worktree-relative paths of project scripts you have
+  vetted (default: none; plain `dir/name` paths only, no globs, `..`, absolute
+  or secret-like entries; invalid entries are dropped). See
+  [Trusted project scripts](#trusted-project-scripts).
+
+## Trusted project scripts
+
+Any project script not in `trustedScripts` is judged by the reviewer, which
+usually asks. A listed script (for example
+`./scripts/check-src-rule-violations.sh src/systems/turn.ts`) runs without
+prompting only when all hold: the worktree is trusted; the command is the
+exact `./<listed path>` followed only by explicit non-secret, non-glob,
+in-worktree path arguments (no flags, no shell composition); the script is
+tracked by Git; and nothing under the script's directory differs from `HEAD`
+or is untracked/ignored. A modified or untracked script is a guard ask, so it
+also overrides a stored "Allow always". A script file the agent has committed
+is, by definition, `HEAD`: review commits that touch listed scripts.
+
+**Drift check.** Every tracked `scripts/*.sh` must be deliberately classified,
+listed or exempted, so new scripts cannot silently fall outside the list:
+
+```bash
+bun scripts/check-trusted-scripts.ts --config ~/.config/opencode/opencode.jsonc \
+  --repo /path/to/project --exempt scripts/release.sh
+```
+
+It exits 1 and names each unclassified script. The list lives in your config,
+not in a repository, so run this where that config exists (a project's
+pre-push hook, or by hand).
 
 ## Trusted-worktree workflow
 
@@ -210,6 +240,10 @@ allowlist:
 - `./scripts/run-with-mise.sh yarn test`, `build`, or `verify:*`; and an exact
   `yarn install` only if `package.json` and `yarn.lock` are unchanged from
   `HEAD` and neither is untracked.
+- `git blame` of exactly one explicit, non-secret in-worktree file, with only
+  `-L <n>[,<m>|,+<k>]`, `-w`, `-s`, `-e`, and an optional `--`. Other flags
+  (`--contents`, `--ignore-revs-file`), several files, or a secret-like path
+  prompt.
 - `git add` with one or more explicit, non-secret, non-glob paths (with an
   optional standalone `--`). Broad staging, options, `.env*`, credential
   files, private-key material, and parent/absolute paths prompt.

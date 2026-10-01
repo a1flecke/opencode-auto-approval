@@ -9,6 +9,19 @@ export interface TrustedWorkflowOptions {
   readonly trustedRoots: readonly string[];
   readonly trustedRemoteHosts: readonly string[];
   readonly defaultBranches: readonly string[];
+  /**
+   * Exact worktree-relative paths (e.g. `scripts/check-rules.sh`) of project
+   * scripts the user has vetted. Defaults to none; lives only in user config.
+   */
+  readonly trustedScripts?: readonly string[];
+}
+
+/** Result of the read-only probe for trusted project scripts. */
+export interface ScriptProbe {
+  /** Trusted-script paths that are tracked by Git. */
+  readonly tracked: readonly string[];
+  /** Paths under the trusted scripts' directories that differ from HEAD, or are untracked/ignored. */
+  readonly dirty: readonly string[];
 }
 
 export interface WorktreeMetadata {
@@ -21,6 +34,8 @@ export interface WorktreeMetadata {
   readonly rebaseActive: boolean;
   readonly hasUnresolvedConflicts: boolean;
   readonly unresolvedConflictFiles: readonly string[];
+  /** Absent when no trusted scripts are configured or the probe failed (fails closed). */
+  readonly scriptProbe?: ScriptProbe;
 }
 
 export type WorkflowDecision =
@@ -49,11 +64,76 @@ const ROUTINE_PROCESS_PATTERNS = new Set([
   "cargo build",
 ]);
 
-/** True only for a command family this deterministic preflight owns. */
-export function isTrustedWorkflowCandidate(command: string): boolean {
-  return /^(?:\.\/scripts\/run-with-mise\.sh yarn (?:install|test|build|verify:)|git (?:add|fetch|ls-remote|rebase|push)(?:\s|$)|GIT_EDITOR=true git rebase(?:\s|$)|gh pr create(?:\s|$))/.test(
-    command.trim(),
+const SCRIPT_ARG = /^[A-Za-z0-9_@+][A-Za-z0-9._/@+-]*$/;
+
+/** A trusted-script entry is a plain worktree-relative path inside a directory, never secret-like. */
+export function isValidTrustedScriptPath(path: string): boolean {
+  if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/.test(path)) return false;
+  if (path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  return !SECRET_PATH.test(path);
+}
+
+function scriptPathOf(command: string, options: TrustedWorkflowOptions): string | null {
+  if (!command.startsWith("./")) return null;
+  const script = command.split(/\s+/)[0].slice(2);
+  return options.trustedScripts?.includes(script) ? script : null;
+}
+
+/**
+ * True only for a command family this deterministic preflight owns. A project
+ * script is owned only when the user listed it in `trustedScripts`; any other
+ * script stays with the reviewer exactly as before.
+ */
+export function isTrustedWorkflowCandidate(command: string, options?: TrustedWorkflowOptions): boolean {
+  const trimmed = command.trim();
+  if (options && scriptPathOf(trimmed, options) !== null) return true;
+  return /^(?:\.\/scripts\/run-with-mise\.sh yarn (?:install|test|build|verify:)|git (?:add|fetch|ls-remote|rebase|push|blame)(?:\s|$)|GIT_EDITOR=true git rebase(?:\s|$)|gh pr create(?:\s|$))/.test(
+    trimmed,
   );
+}
+
+function scriptDecision(script: string, tokens: readonly string[], metadata: WorktreeMetadata): WorkflowDecision {
+  const category = "trusted-script";
+  const args = tokens.slice(1);
+  if (!args.every((arg) => SCRIPT_ARG.test(arg) && isSafeStagePath(arg))) {
+    return ask(category, "A trusted script is automatic only with explicit non-sensitive in-worktree path arguments.");
+  }
+  const probe = metadata.scriptProbe;
+  if (!probe) return ask(category, "Could not verify the trusted script against Git; human approval is required.");
+  if (!probe.tracked.includes(script)) {
+    return guardAsk(category, "The script is not tracked by Git, so it is not the vetted version.");
+  }
+  const dir = `${script.slice(0, script.lastIndexOf("/"))}/`;
+  if (probe.dirty.some((path) => path.startsWith(dir))) {
+    return guardAsk(category, "The script's directory has changes or untracked files not in HEAD; review before running.");
+  }
+  return { kind: "allow", category, reason: "Vetted project script, unchanged from HEAD, with explicit path arguments only." };
+}
+
+const BLAME_RANGE = /^\d+(?:,(?:\d+|\+\d+))?$/;
+
+/** `git blame` is read-only: one explicit file, with only a line range and whitespace/format flags. */
+function blameDecision(tokens: readonly string[]): WorkflowDecision {
+  const category = "git-blame";
+  const rest = tokens.slice(2);
+  const files: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i];
+    if (token === "-L") {
+      if (i + 1 >= rest.length || !BLAME_RANGE.test(rest[i + 1])) return ask(category, "Automatic blame accepts only a numeric -L line range.");
+      i += 1;
+    } else if (token === "-w" || token === "-s" || token === "-e" || token === "--") {
+      continue;
+    } else if (token.startsWith("-")) {
+      return ask(category, "Automatic blame accepts only -L, -w, -s, and -e.");
+    } else {
+      files.push(token);
+    }
+  }
+  if (files.length !== 1) return ask(category, "Automatic blame requires exactly one explicit file path.");
+  if (SECRET_PATH.test(files[0])) return guardAsk(category, "Blaming a secret-like path is never automatic.");
+  if (!isSafeStagePath(files[0])) return ask(category, "Automatic blame is limited to an explicit in-worktree path.");
+  return { kind: "allow", category, reason: "Read-only blame of one explicit non-sensitive file." };
 }
 
 function ask(category: string, reason: string): WorkflowDecision {
@@ -148,6 +228,9 @@ function commandFamily(command: string, metadata: WorktreeMetadata, options: Tru
   }
 
   const tokens = command.split(/\s+/);
+  const script = scriptPathOf(command, options);
+  if (script !== null) return scriptDecision(script, tokens, metadata);
+  if (tokens[0] === "git" && tokens[1] === "blame") return blameDecision(tokens);
   const paths = stagePaths(tokens);
   if (paths !== null) {
     return paths.every(isSafeStagePath)
@@ -344,7 +427,7 @@ export function evaluateTrustedWorkflow(
   const normalized = command.trim();
   if (normalized.length === 0) return { kind: "unrecognized" };
   if (SHELL_COMPOSITION.test(normalized)) {
-    return isTrustedWorkflowCandidate(normalized)
+    return isTrustedWorkflowCandidate(normalized, options)
       ? ask("command-shape", "Automatic workflow commands cannot contain shell composition or expansion.")
       : { kind: "unrecognized" };
   }

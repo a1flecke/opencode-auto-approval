@@ -92,4 +92,34 @@ describe("loadWorktreeMetadata", () => {
     };
     await expect(loadWorktreeMetadata(directory, failing, async () => false)).resolves.toBeNull();
   });
+
+  test("probes trusted scripts read-only and fails closed to no probe on error", async () => {
+    const run: RunReadOnly = async (_d, args) => {
+      const key = args.join(" ");
+      const r: Record<string, string> = {
+        "git rev-parse --show-toplevel": "/home/user/dev/project\n",
+        "git rev-parse --git-dir": "/home/user/dev/project/.git\n",
+        "git branch --show-current": "feature/x\n",
+        "git remote get-url origin": "git@github.com:example-org/project.git\n",
+        "git diff --name-only HEAD -- package.json yarn.lock": "",
+        "git ls-files --others --exclude-standard -- package.json yarn.lock": "",
+        "git status --porcelain": "",
+        "git diff --cached --name-only": "",
+        "git ls-files -- scripts/check-rules.sh": "scripts/check-rules.sh\n",
+        "git diff --name-only --relative HEAD -- scripts": "scripts/lib.sh\n",
+        "git ls-files --others -- scripts": "",
+      };
+      if (!(key in r)) throw new Error(`unexpected probe: ${key}`);
+      return r[key];
+    };
+    const meta = await loadWorktreeMetadata(directory, run, async () => false, undefined, ["scripts/check-rules.sh"]);
+    expect(meta?.scriptProbe).toEqual({ tracked: ["scripts/check-rules.sh"], dirty: ["scripts/lib.sh"] });
+    const failing: RunReadOnly = async (d, args) => {
+      if (args[1] === "ls-files" && args[2] === "--" && args[3] === "scripts/check-rules.sh") throw new Error("boom");
+      return run(d, args);
+    };
+    const degraded = await loadWorktreeMetadata(directory, failing, async () => false, undefined, ["scripts/check-rules.sh"]);
+    expect(degraded).not.toBeNull();
+    expect(degraded?.scriptProbe).toBeUndefined();
+  });
 });

@@ -17,6 +17,7 @@
  */
 
 import { isSensitiveEvenIfAllowed, redact } from "./policy.js";
+import { isValidTrustedScriptPath } from "./trusted-worktree.js";
 import { runReviewer, type MinimalPluginContext, type MinimalPermissionEvent } from "./reviewer.js";
 import {
   evaluateTrustedWorktreeCommand,
@@ -54,6 +55,7 @@ interface PluginOptionsShape {
   trustedRoots?: unknown;
   trustedRemoteHosts?: unknown;
   defaultBranches?: unknown;
+  trustedScripts?: unknown;
 }
 
 interface ResolvedOptions {
@@ -66,6 +68,7 @@ interface ResolvedOptions {
   trustedRoots: readonly string[];
   trustedRemoteHosts: readonly string[];
   defaultBranches: readonly string[];
+  trustedScripts: readonly string[];
 }
 
 const DEFAULT_OPTIONS: ResolvedOptions = {
@@ -87,6 +90,7 @@ const DEFAULT_OPTIONS: ResolvedOptions = {
   trustedRoots: [],
   trustedRemoteHosts: ["github.com"],
   defaultBranches: ["main", "master"],
+  trustedScripts: [],
 };
 
 function stringList(value: unknown, fallback: readonly string[]): readonly string[] {
@@ -125,6 +129,9 @@ export function resolveOptions(raw: unknown): ResolvedOptions {
     trustedRoots: stringList(o.trustedRoots, DEFAULT_OPTIONS.trustedRoots),
     trustedRemoteHosts: stringList(o.trustedRemoteHosts, DEFAULT_OPTIONS.trustedRemoteHosts),
     defaultBranches: stringList(o.defaultBranches, DEFAULT_OPTIONS.defaultBranches),
+    // Invalid entries (globs, absolute or parent paths, secret-like names) are
+    // dropped, never repaired: a script that cannot be matched exactly is not trusted.
+    trustedScripts: stringList(o.trustedScripts, DEFAULT_OPTIONS.trustedScripts).filter(isValidTrustedScriptPath),
   };
 }
 
