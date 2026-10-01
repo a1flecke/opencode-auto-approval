@@ -1,9 +1,9 @@
 name: Release
 
 # Releases are cut only by pushing a vMAJOR.MINOR.PATCH tag. Tag creation is
-# restricted by a repository ruleset (see scripts/configure-repo.sh), the
-# `release` environment requires an approval, and the GitHub release is
-# published last so that GitHub's immutable-releases setting locks the tag and
+# restricted by a repository ruleset (see scripts/configure-repo.sh), there is
+# no manual approval step (the verify job and the tag ruleset are the gates),
+# and the GitHub release is published last so that GitHub's immutable-releases setting locks the tag and
 # every asset the moment it goes public.
 
 on:
@@ -95,8 +95,6 @@ jobs:
     needs: verify-and-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Manual approval gate; restricted to v* tags by configure-repo.sh.
-    environment: release
     permissions:
       contents: write       # create the release
       packages: write       # publish to GitHub Packages

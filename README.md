@@ -38,8 +38,7 @@ linted with zizmor, default `GITHUB_TOKEN` permissions denied):
   A single `required` job aggregates them and is the branch-protection check.
 - `codeql.yml` — CodeQL on PRs, `main`, and weekly.
 - `release.yml` — runs only for a `vX.Y.Z` tag that matches `package.json` and
-  is on `main`. It re-runs the checks, packs the tarball once, waits for approval
-  on the `release` environment, attests build provenance, creates a **draft**
+  is on `main`. It re-runs the checks, packs the tarball once, attests build provenance, creates a **draft**
   GitHub release with the tarball and its `.sha256`, publishes the package to
   GitHub Packages, and publishes the release **last**.
 
@@ -54,8 +53,8 @@ To fix a bad release, ship a new version; never rewrite the old one.
 **Before pushing:** run `sh scripts/setup-git-hooks.sh` once per clone; the tracked `pre-push` hook then runs `scripts/verify-before-push.sh` (private-content scan, package check, tests).
 
 **Cutting a release:** bump `version` in `package.json` through a PR, merge it,
-then push the tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`) and
-approve the `release` environment deployment.
+then push the tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`). The
+release then runs automatically; there is no manual approval step.
 
 **Repository settings** are code: after the first push of `main`, run
 `bash scripts/configure-repo.sh OWNER/REPO` (admin `gh` auth required). It
