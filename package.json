@@ -1,0 +1,8 @@
+{
+  "name": "model-approval",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "description": "Local model-reviewed permission plugin for OpenCode V2. Contextually arbitrates 'ask' permission checks and re-reviews a narrow sensitive-even-if-allowed class, falling back to human approval on any doubt or failure."
+}

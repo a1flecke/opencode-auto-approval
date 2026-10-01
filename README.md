@@ -1,0 +1,316 @@
+# opencode-auto-approval
+
+A local, inspectable OpenCode V2 plugin that adds contextual, model-reviewed
+permission decisions on top of OpenCode's built-in permission system — Layer
+3 of a three-layer model. You own this file, it is not a third-party
+marketplace plugin.
+
+## Install and update
+
+There is no build step and no runtime dependencies.
+
+1. Clone this repository anywhere outside the projects your agents work in.
+2. Register it by path in `~/.config/opencode/opencode.jsonc` (see
+   [Configuration](#configuration)). Set `trustedRoots` explicitly: the
+   built-in default is an empty list, so without it the deterministic
+   trusted-worktree preflight never auto-approves anything (it fails closed).
+3. Restart the OpenCode service.
+
+To update: `git pull` (or check out a tag), then restart OpenCode. Run
+`bun test` before restarting after any local change. Keep your machine-specific
+values (`trustedRoots`, model, key variable name) in your OpenCode config, never
+in this repository.
+
+Because this plugin decides what your agents may run, keep the clone out of any
+path your agents may edit: add an `edit` deny for its directory in your OpenCode
+permissions so changes come only from you.
+
+## Why this exists
+
+Without it, OpenCode's permission system has two states for anything not
+explicitly allowed/denied: prompt the human, or (with `--auto`/a saved
+"Allow always") skip review entirely. That's either too much friction for
+routine engineering work, or too little scrutiny for a stale broad approval.
+This plugin adds a middle tier: Jev System One evaluates *this specific
+proposed operation* against five fixed safety questions and recent user
+instructions. It can return only `allow` or `ask`; any uncertainty, timeout,
+transport failure, missing key, or malformed response becomes a human prompt.
+
+## The three-layer model (tested 2026-09-27 against OpenCode 2.0.18)
+
+```
+Layer 1 — HARD POLICY        (experimental.policies in opencode.jsonc)
+  sudo/su, ordinary forced pushes, `gh repo delete`, reading SSH private keys,
+  whole-machine/home wipe commands. Runs AFTER agent rules and saved
+  approvals and BEFORE this plugin — nothing below can override it, not a
+  stale "Allow always", not a plugin bug, not a --auto flag.
+
+Layer 2 — DETERMINISTIC PERMISSIONS   (permissions[] in opencode.jsonc)
+  Routine reads/edits/git-inspection/gh-inspection are `allow`. Anything
+  ambiguous resolves to `ask`, which flows into Layer 3.
+
+Layer 3 — THIS PLUGIN
+  For an `ask`, it first applies a small deterministic trusted-worktree
+  preflight. Recognized routine commands can be allowed only after exact
+  local Git metadata checks; a failed check is always `ask`. Everything else,
+  plus the narrow "sensitive-even-if-allowed" class (gh pr merge, git reset
+  --hard, publish/deploy, auth changes, cloud mutations, secret-file reads,
+  new dependency installs, etc — see `policy.ts`), goes to Jev. Both paths
+  choose allow / ask only. Any uncertainty, metadata failure, timeout,
+  malformed reply, missing key, or exception becomes `ask`, never `allow`.
+```
+
+## Files
+
+- `index.ts` — plugin entry point (`export default { id, setup }`). Registers
+  the `ctx.permission.hook("evaluate", ...)` callback, gates on the
+  sensitive-even-if-allowed classifier, calls the reviewer under a timeout,
+  and records outcome counters in `ctx.storage`.
+- `reviewer.ts` — builds bounded, redacted context and calls the authenticated
+  OpenCode Zen System One endpoint with five typed `noul` questions.
+- `policy.ts` — pure, dependency-free sensitive-operation classification and
+  secret redaction.
+- `trusted-worktree.ts` — pure, auditable decision rules for normal Git/Yarn
+  workflow commands; it neither executes commands nor reads files.
+- `git-metadata.ts` and `workflow-preflight.ts` — fixed read-only Git probes
+  and the runtime adapter that supplies their results to the pure rules.
+- `test/` — `bun test` suite for options, policy, and reviewer behavior. No
+  network or OpenCode process is required.
+
+## Why there's no `import { Plugin } from "@opencode/plugin"`
+
+That package's `Plugin.define()` is an identity function purely for
+IDE/type-checking convenience — it is not resolvable at runtime unless
+installed as an actual dependency next to this file, and this plugin
+deliberately has zero dependencies. This was verified two ways:
+
+1. OpenCode's own actively-maintained `superpowers` plugin does the same
+   thing, with the comment "No external dependencies — pure JavaScript works
+   ... without installing @opencode-ai/plugin or effect."
+2. A disposable test plugin that *did* `import { Plugin } from "@opencode/plugin"`
+   failed to load with `Cannot find package '@opencode/plugin'` when pointed
+   at from a project's `opencode.jsonc`, while the identical plugin with a
+   plain `export default { id, setup }` loaded and its permission hook fired
+   correctly (independently verified end-to-end: a shell command was
+   deliberately denied by the hook and the run was blocked with the
+   plugin's own message).
+
+The shapes used in `index.ts`/`reviewer.ts` (the `PermissionEvaluation`
+event's `resources: readonly string[]` and
+`ctx.session.context({sessionID})` returning typed session messages) were
+confirmed against the installed OpenCode 2.0.18 plugin/client definitions.
+The direct reviewer route is required because `ctx.generate.text()` creates
+no OpenCode session and therefore cannot carry the routing identity required
+by free or Go inference.
+
+## Configuration
+
+Registered in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+"plugins": [
+  "superpowers@git+https://github.com/obra/superpowers.git",
+  {
+    "package": "/path/to/opencode-auto-approval",
+    "options": {
+      "model": "jev-1.13-free",
+      "apiKeyEnvVar": "OPENCODE_GO_API_KEY",
+      "timeoutMs": 8000,
+      "maxContextChars": 12000,
+      "threshold": 0.85,
+      "debug": false,
+      "trustedRoots": ["/home/user/dev"],
+      "trustedRemoteHosts": ["github.com"],
+      "defaultBranches": ["main", "master"]
+    }
+  }
+]
+```
+
+- `model` — `jev-1.13-free`, OpenCode's limited-time-free System One model
+  for fast structured yes/no decisions. It is not used as a general chat
+  model.
+- `apiKeyEnvVar` — the desktop process environment variable containing an
+  inference-only OpenCode Console key. The key is sent only as a Bearer
+  authorization header; it is never written to this file, logged, persisted,
+  or placed in Jev's decision state. The existing `OPENCODE_GO_API_KEY` name
+  works despite its historical name because the same scoped Console key
+  authenticated the Zen endpoint in a live probe.
+- `timeoutMs` — 8000ms. On timeout the check becomes `ask`, never `allow`.
+- `maxContextChars` — 12000 chars of recent user/assistant/system text (most
+  recent first, then re-ordered chronologically for the prompt). Shell/tool
+  output is deliberately excluded from context — only conversation text is
+  sent, so injected tool output can't pose as a user instruction.
+- `debug` — off by default. When `true`, logs one line per reviewed check to
+  stderr (action, sensitivity category, decision, latency, reason) — no
+  secret values, since everything is redacted before logging too. Does not
+  persist full conversation text anywhere; `ctx.storage` only ever holds the
+  small aggregate counters below.
+- `threshold` — 0.85. Jev must meet or exceed it on **all five** checks:
+  harmless operation, private-data safety, explicit trusted intent, no
+  untrusted-code execution, and narrow authorized effect. This was calibrated
+  on live probes: an explicit `git status` had a minimum 0.87; an unauthorized
+  PR merge had a maximum relevant score of 0.70; an injected upload-shaped
+  command scored 0.06–0.16.
+- `trustedRoots`, `trustedRemoteHosts`, and `defaultBranches` — the complete
+  local trust boundary for deterministic workflow approval. The defaults are
+  the personal development directory, `github.com`, and `main`/`master`.
+  An empty or malformed override falls back to those conservative defaults.
+
+## Trusted-worktree workflow
+
+The following commands can bypass Jev only when all conditions hold: the
+originating shell invocation resolves to a Git worktree below `trustedRoots`,
+its `origin` is a listed host, and the command has no shell
+composition/expansion. This is an exact command allowlist, not a prefix
+allowlist:
+
+- `./scripts/run-with-mise.sh yarn test`, `build`, or `verify:*`; and an exact
+  `yarn install` only if `package.json` and `yarn.lock` are unchanged from
+  `HEAD` and neither is untracked.
+- `git add` with one or more explicit, non-secret, non-glob paths (with an
+  optional standalone `--`). Broad staging, options, `.env*`, credential
+  files, private-key material, and parent/absolute paths prompt.
+- `git fetch origin`, plus a direct `git ls-remote origin refs/heads/<current-
+  feature-branch>` inspection. Other remotes, default-branch refs, refspecs,
+  and shell-composed checks prompt.
+- `git rebase origin/main` only on a nondefault branch with no rebase or merge
+  conflict already in progress.
+- The initial rebase must use that exact direct command. `GIT_EDITOR=true` is
+  reserved for `git rebase --continue`; output filtering or other shell
+  composition around either form prompts.
+- `git push origin HEAD` or `git push origin <current-feature-branch>` only
+  from a nondefault branch, without flags, force, tags, deletion, or refspec
+  rewrite. After a completed rebase, the exact lease-protected form
+  `git push --force-with-lease origin HEAD:<current-feature-branch>` is also
+  allowed. It remains limited to the verified current nondefault branch and
+  is rejected while a rebase or conflict is active.
+- `gh pr create --base main|master --head <current-feature-branch> --fill`
+  only from a nondefault branch.
+
+Every near miss remains `ask`: a new dependency, another remote, default
+branch work, an added flag, shell chaining, an unfamiliar command, or an
+unverifiable Git state. Hard-deny policies still win before this plugin.
+
+### Worktree resolution
+
+The plugin never treats its startup `directory`/`worktree` as proof that a
+specific permission request belongs to that worktree. Those values describe
+where OpenCode loaded the plugin; a session may instead run a tool from a
+linked worktree with `cd /absolute/worktree && …`. For a permission request
+without an explicit absolute `cwd`, the plugin binds `event.source.id` to the
+same source tool invocation and accepts only that strict leading `cd` form.
+It then independently verifies the resulting Git metadata. A base checkout,
+an ambiguous shell expression, and a source mismatch all remain `ask`.
+
+## What gets reviewed vs. what doesn't
+
+- A plain `allow` outside the sensitive class returns from the hook
+  immediately — **no model call, no added latency** for routine reads,
+  edits, or already-allowed git/gh inspection commands.
+- The global policy additionally allows pure shell inspection (`pwd`, `ls`,
+  `which`, `command -v`, `basename`, `dirname`, and `realpath`) directly.
+  It intentionally does **not** blanket-allow `find`, `sed`, `cat`, or shell
+  pipelines: those can read secrets or use effectful flags despite looking
+  like reconnaissance.
+- Anything resolving to `ask` is always reviewed.
+- A narrow list of categories is reviewed **even if** Layer 2 or a saved
+  "Allow always" approval already resolved it to `allow` — see
+  `SENSITIVE_RULES` in `policy.ts` for the exact patterns (currently: PR/issue
+  merge-close-delete, GitHub repo mutation, `gh api` mutations, releases/tags,
+  `git reset --hard`, `git clean -f*`, remote branch deletion, rebase/filter,
+  auth/login changes, publish/deploy commands, cloud/infra mutations, network
+  uploads via curl/wget/scp/rsync, `.env`/credentials-file reads, and
+  installing a new dependency).
+
+### Expected prompts
+
+Prompting is intentional for anything outside the exact trusted-worktree set:
+commits, history rewrites other than the exact rebase, new or changed
+dependencies, broader staging, remote mutation beyond a feature-branch push
+or filled PR, sensitive files, and work outside the known worktree. Jev is a
+fail-closed second check for those bounded asks; it is not a replacement for
+the explicit deterministic trust decision above.
+
+## Observability
+
+`ctx.storage` under key `model-approval:stats` holds a small JSON object:
+`{ reviewed, allow, ask, deny, failures, timeouts, totalLatencyMs }`. `deny`
+remains a legacy counter and is never incremented by Jev. No raw
+commands, no conversation text, no secrets are persisted — just counters, so
+you can sanity-check how often the reviewer is actually firing without
+creating a new leak surface.
+
+On every plugin load, `model-approval:service-readiness` records only whether
+the **running OpenCode service process** has the configured key, along with
+the key variable name, selected reviewer model, timestamp, and one of
+`configured`/`missing-api-key`. The value of the key is never stored or
+logged. If a reviewer call discovers a missing key later, the permission
+message says so explicitly and refreshes this record. This distinguishes a
+reviewer outage from a genuine safety prompt.
+
+## Known limitations
+
+- This is a probabilistic safety aid, not a security boundary. Keep the Layer
+  1 hard policies and deterministic permission rules; Jev only reduces normal
+  approval friction.
+- The 8-second timeout does not cancel a request already in flight. It only
+  stops waiting and returns `ask`; the late result cannot change the pending
+  permission decision.
+- Restart the OpenCode service (or fully reopen the desktop app) after editing
+  this global plugin/configuration so the running process reloads it. Restart
+  interrupts active tasks. When the key is loaded from `~/.zshenv`, restart
+  through a login shell so the detached service inherits that environment:
+
+  ```bash
+  /bin/zsh -lc '/Applications/OpenCode.app/Contents/Resources/opencode-cli service restart'
+  ```
+
+  A terminal having the key is not sufficient evidence: the readiness record
+  above reflects the actual plugin host process.
+
+## Testing
+
+```bash
+cd ~/.config/opencode/plugins/model-approval
+mise exec bun@1.4.2 -- bun test
+```
+
+The tests cover options validation, all five required Jev answers, threshold
+mapping, malformed-payload fallback, missing-key behavior before any network
+call, sensitive-operation classification, redaction, bounded context, and
+injection-safe state construction. The live integration proof sends three
+non-mutating probes through the production reviewer: explicit `git status`
+allows; an unauthorized `gh pr merge` asks; and an injected upload-shaped
+command asks.
+
+## Disabling / rolling back
+
+**Fastest disable** (keeps everything else): remove the object entry for
+`model-approval` from the `plugins` array in
+`~/.config/opencode/opencode.jsonc`, then restart the service or reopen the
+app. The hard `experimental.policies` block is independent of this plugin
+and will keep working even with the plugin removed.
+
+**Full rollback to the pre-setup config**: copy the timestamped backup back
+into place —
+
+```bash
+cp ~/.config/opencode/backups/opencode.jsonc.bak-<timestamp> ~/.config/opencode/opencode.jsonc
+```
+
+(see `ls ~/.config/opencode/backups/` for the exact filename), then restart
+the service. The plugin directory itself
+(`~/.config/opencode/plugins/model-approval/`) can simply be left in place
+unreferenced, or deleted — it has no effect unless listed in `plugins`.
+
+## Extending
+
+- Add a new hard-deny to `experimental.policies` in `opencode.jsonc` for
+  anything that should be impossible regardless of context.
+- Add a new sensitive-even-if-allowed pattern to `SENSITIVE_RULES` in
+  `policy.ts` (with a test in `test/policy.test.ts`) for anything that should
+  always get a contextual second look even when otherwise allowed.
+- Everything else is arbitrated by the fixed state and five typed questions in
+  `reviewer.ts` — edit those with tests, rather than adding ad-hoc branching
+  logic in `index.ts`.
