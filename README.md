@@ -261,7 +261,7 @@ allowlist:
   `git push --force-with-lease origin HEAD:<current-feature-branch>` is also
   allowed. It remains limited to the verified current nondefault branch and
   is rejected while a rebase or conflict is active.
-- `gh pr create --base main|master --head <current-feature-branch> --fill`
+- `gh pr create --base main|master --head <current-feature-branch>` with any of `--fill`, `--draft`, `--title "…"`, `--body "…"`, `--body-file <safe path>` (each at most once; plain quotes, no `$`, backticks, `;`, `|`, or backslashes, so use `--body-file` for rich bodies). `--repo`, `--web`, reviewers, and other flags prompt.
   only from a nondefault branch.
 
 Every near miss remains `ask`: a new dependency, another remote, default

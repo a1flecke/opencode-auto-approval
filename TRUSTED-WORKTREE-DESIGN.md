@@ -47,7 +47,7 @@ All commands below require the trusted-worktree boundary.
 | Blame | `git blame` of one explicit non-secret file with only `-L`, `-w`, `-s`, `-e`, `--`. | Other flags, several files, secret-like or external path. |
 | Rebase from origin/main | Exactly `git rebase origin/main`; current branch is not `main` or `master`; no rebase/conflict is already in progress. | Any flags, different target, default branch, or in-progress/conflicted rebase. |
 | Feature-branch push | Exactly `git push origin HEAD` or a current non-default branch to the same-named remote branch; no force, tags, delete, refspec rewrite, or alternate remote. | Default branch, a different remote/refspec, any force/delete/tag option, or unknown branch state. |
-| Pull-request creation | `gh pr create` for the current non-default branch against the same GitHub origin; the base is `main` or `master`. | Different repository/head/base, administrative options, a non-GitHub remote, or unsupported command form. |
+| Pull-request creation | `gh pr create` for the current non-default branch against the same GitHub origin; the base is `main` or `master`; only `--fill`, `--draft`, `--title`, `--body`, `--body-file <safe path>` are accepted, each once. | Different repository/head/base, `--repo`/`--web`/reviewer or other options, composition inside a body (use `--body-file`), a non-GitHub remote, or unsupported command form. |
 
 The preflight uses read-only Git queries only: repository root, current branch,
 origin URL, default-branch comparison, status/rebase state, and the diff for

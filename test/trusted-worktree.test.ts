@@ -151,6 +151,9 @@ describe("evaluateTrustedWorkflow", () => {
     ["git push origin feature/x", "push-feature-branch"],
     ["git push --force-with-lease origin HEAD:feature/x", "push-feature-branch-with-lease"],
     ["gh pr create --base main --head feature/x --fill", "create-pull-request"],
+    ["gh pr create --base main --head feature/x --fill --draft", "create-pull-request"],
+    ['gh pr create --base main --head feature/x --title "Add trustedScripts" --body "Why and what"', "create-pull-request"],
+    ["gh pr create --base main --head feature/x --title 'Fix it' --body-file docs/pr.md", "create-pull-request"],
   ])("allows the trusted workflow: %s", (command, category) => {
     expect(decide(command)).toMatchObject({ kind: "allow", category });
   });
@@ -180,7 +183,14 @@ describe("evaluateTrustedWorkflow", () => {
     ["git push --force-with-lease origin HEAD:feature/x", { rebaseActive: true }],
     ["git push origin --tags", {}],
     ["git push fork HEAD", {}],
-    ["gh pr create --base main --head feature/x --fill --draft", {}],
+    ["gh pr create --base main --head feature/x --fill --repo other/repo", {}],
+    ["gh pr create --base main --head feature/x --fill --web", {}],
+    ["gh pr create --base main --head feature/x --title a --title b", {}],
+    ["gh pr create --base main --head feature/x --body-file ../x.md", {}],
+    ["gh pr create --base main --head feature/x --body-file .env", {}],
+    ["gh pr create --base main --head feature/x --title \"unterminated", {}],
+    ["gh pr create --base main --head feature/x --title \"x $(whoami)\"", {}],
+    ["gh pr create --base main --head feature/x --fill", { branch: "main" }],
     ["gh pr create --base develop --head feature/x --fill", {}],
     ["git add src/main.ts && git push origin HEAD", {}],
   ])("asks when the trusted-worktree contract is not met: %s", (command, overrides) => {
