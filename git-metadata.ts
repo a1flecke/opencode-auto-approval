@@ -2,7 +2,7 @@
 
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import type { WorktreeMetadata } from "./trusted-worktree.js";
+import type { ScriptProbe, WorktreeMetadata } from "./trusted-worktree.js";
 
 export type RunReadOnly = (directory: string, args: readonly string[]) => Promise<string>;
 export type PathExists = (path: string) => Promise<boolean>;
@@ -30,11 +30,34 @@ function branchFromRebaseHeadName(value: string): string | null {
   return match && match[1].length > 0 ? match[1] : null;
 }
 
+/** Read-only probe: are the trusted scripts tracked and their directories identical to HEAD? */
+async function probeScripts(
+  directory: string,
+  run: RunReadOnly,
+  scripts: readonly string[],
+): Promise<ScriptProbe | undefined> {
+  if (scripts.length === 0) return undefined;
+  try {
+    const dirs = [...new Set(scripts.map((script) => script.slice(0, script.lastIndexOf("/"))))];
+    const [tracked, diffed, untracked] = await Promise.all([
+      run(directory, ["git", "ls-files", "--", ...scripts]),
+      run(directory, ["git", "diff", "--name-only", "--relative", "HEAD", "--", ...dirs]),
+      // Without --exclude-standard this also lists ignored files, which the
+      // agent can create just as freely as untracked ones.
+      run(directory, ["git", "ls-files", "--others", "--", ...dirs]),
+    ]);
+    return { tracked: lines(tracked), dirty: [...new Set([...lines(diffed), ...lines(untracked)])] };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loadWorktreeMetadata(
   directory: string,
   run: RunReadOnly,
   pathExists: PathExists,
   readText: ReadText = (target) => Bun.file(target).text(),
+  trustedScripts: readonly string[] = [],
 ): Promise<WorktreeMetadata | null> {
   try {
     const [root, gitDir, branch, originUrl, changed, untrackedInputs, status, staged] = await Promise.all([
@@ -62,6 +85,7 @@ export async function loadWorktreeMetadata(
         : null;
     const activeBranch = branch.trim() || recoveredBranch;
     if (!normalizedRoot || !normalizedGitDir || !activeBranch || !originUrl.trim()) return null;
+    const scriptProbe = await probeScripts(directory, run, trustedScripts);
     return {
       directory,
       root: normalizedRoot,
@@ -72,6 +96,7 @@ export async function loadWorktreeMetadata(
       rebaseActive,
       hasUnresolvedConflicts,
       unresolvedConflictFiles: conflicts,
+      ...(scriptProbe ? { scriptProbe } : {}),
     };
   } catch {
     return null;

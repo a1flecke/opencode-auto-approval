@@ -3,6 +3,8 @@ import {
   evaluateRoutineProcessCheck,
   evaluateTrustedWorkflowBatch,
   evaluateTrustedWorkflow,
+  isTrustedWorkflowCandidate,
+  isValidTrustedScriptPath,
   type TrustedWorkflowOptions,
   type WorktreeMetadata,
 } from "../trusted-worktree.js";
@@ -31,6 +33,93 @@ function fixture(overrides: Partial<WorktreeMetadata> = {}): WorktreeMetadata {
 function decide(command: string, overrides: Partial<WorktreeMetadata> = {}) {
   return evaluateTrustedWorkflow(command, fixture(overrides), options);
 }
+
+const scriptOptions: TrustedWorkflowOptions = { ...options, trustedScripts: ["scripts/check-rules.sh"] };
+const cleanProbe = { tracked: ["scripts/check-rules.sh"], dirty: [] as string[] };
+
+function decideScript(command: string, overrides: Partial<WorktreeMetadata> = {}, opts = scriptOptions) {
+  return evaluateTrustedWorkflow(command, fixture({ scriptProbe: cleanProbe, ...overrides }), opts);
+}
+
+describe("trusted scripts", () => {
+  test.each([
+    "./scripts/check-rules.sh",
+    "./scripts/check-rules.sh src/systems/espionage-turn.ts",
+    "./scripts/check-rules.sh src/a.ts src/b.ts",
+  ])("allows a listed, unchanged script: %s", (command) => {
+    expect(decideScript(command)).toMatchObject({ kind: "allow", category: "trusted-script" });
+  });
+
+  test("an unlisted script or an empty list stays unrecognized (reviewer path)", () => {
+    expect(decideScript("./scripts/other.sh")).toEqual({ kind: "unrecognized" });
+    expect(decideScript("./scripts/check-rules.sh", {}, options)).toEqual({ kind: "unrecognized" });
+    expect(isTrustedWorkflowCandidate("./scripts/other.sh", scriptOptions)).toBe(false);
+  });
+
+  test.each([
+    ["modified in worktree", { scriptProbe: { tracked: ["scripts/check-rules.sh"], dirty: ["scripts/check-rules.sh"] } }],
+    ["sibling file added to scripts dir", { scriptProbe: { tracked: ["scripts/check-rules.sh"], dirty: ["scripts/lib.sh"] } }],
+    ["untracked", { scriptProbe: { tracked: [], dirty: [] } }],
+  ])("guard-asks when the script is %s", (_name, overrides) => {
+    expect(decideScript("./scripts/check-rules.sh", overrides)).toMatchObject({ kind: "ask", guard: true });
+  });
+
+  test("asks (no guard) when the probe is missing", () => {
+    const decision = decideScript("./scripts/check-rules.sh", { scriptProbe: undefined });
+    expect(decision).toMatchObject({ kind: "ask" });
+    expect((decision as { guard?: true }).guard).toBeUndefined();
+  });
+
+  test.each([
+    "./scripts/check-rules.sh --fix",
+    "./scripts/check-rules.sh ../secrets.txt",
+    "./scripts/check-rules.sh /etc/passwd",
+    "./scripts/check-rules.sh .env",
+    "./scripts/check-rules.sh src/*.ts",
+    "./scripts/check-rules.sh src/a.ts; rm -rf /",
+    "./scripts/check-rules.sh $(whoami)",
+  ])("near-miss still asks: %s", (command) => {
+    expect(decideScript(command).kind).toBe("ask");
+  });
+
+  test("asks outside a trusted worktree", () => {
+    expect(decideScript("./scripts/check-rules.sh", { directory: "/tmp/p", root: "/tmp/p" }).kind).toBe("ask");
+  });
+
+  test.each([["scripts/*.sh"], ["../x.sh"], ["/abs/x.sh"], ["x.sh"], ["scripts/.env"], ["scripts/a b.sh"]])(
+    "rejects invalid trusted script entry %s",
+    (entry) => expect(isValidTrustedScriptPath(entry)).toBe(false),
+  );
+  test("accepts a plain relative entry", () => expect(isValidTrustedScriptPath("scripts/check-rules.sh")).toBe(true));
+});
+
+describe("git blame", () => {
+  test.each([
+    "git blame src/core/turn-manager.ts",
+    "git blame -L 150,162 src/core/turn-manager.ts",
+    "git blame -L 150,+12 -w src/core/turn-manager.ts",
+    "git blame -w -- src/core/turn-manager.ts",
+  ])("allows read-only blame: %s", (command) => {
+    expect(decide(command)).toMatchObject({ kind: "allow", category: "git-blame" });
+  });
+
+  test.each([
+    "git blame",
+    "git blame --contents /etc/passwd src/a.ts",
+    "git blame --ignore-revs-file x src/a.ts",
+    "git blame -L abc src/a.ts",
+    "git blame src/a.ts src/b.ts",
+    "git blame ../other.ts",
+    "git blame /etc/passwd",
+    "git blame src/a.ts | cat",
+  ])("near-miss still asks: %s", (command) => {
+    expect(decide(command).kind).toBe("ask");
+  });
+
+  test("blaming a secret-like path is a guard ask", () => {
+    expect(decide("git blame .env")).toMatchObject({ kind: "ask", guard: true });
+  });
+});
 
 describe("evaluateTrustedWorkflow", () => {
   test("allows a filtered status check for an active test-profile process", () => {

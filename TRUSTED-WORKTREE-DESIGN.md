@@ -43,6 +43,8 @@ All commands below require the trusted-worktree boundary.
 | Locked install | The command is the project wrapper followed by `yarn install`; `package.json` and `yarn.lock` are unchanged from `HEAD`. | Manifest/lockfile changed, alternate package manager/source, or extra shell syntax. |
 | Test/build | The command is the project wrapper followed by `yarn test`, `yarn test:*`, `yarn build`, `yarn build:*`, or `yarn verify:*`. | Wrapper is absent, arbitrary shell is appended, or the worktree is untrusted. |
 | Stage explicit files | `git add <one-or-more explicit paths>`, with an optional standalone `--`; every path is within the worktree, is not secret-like, and is not a broad selector. | Any option other than `--`, `.`/`-A`/`-u`, glob-like/broad staging, external path, a `.env*` file, `.npmrc`, `.netrc`, `.pypirc`, `credentials.json`, any path under `.ssh`, or a `*.pem`/`*.key` file. |
+| Trusted project script | `./<path>` exactly as listed in the user-config `trustedScripts`, plus explicit non-secret in-worktree path arguments only; the script is tracked and nothing under its directory differs from `HEAD` or is untracked/ignored. | Unlisted script (reviewer decides), flags, composition, unsafe arguments, modified/untracked script (guard ask), or a failed probe. |
+| Blame | `git blame` of one explicit non-secret file with only `-L`, `-w`, `-s`, `-e`, `--`. | Other flags, several files, secret-like or external path. |
 | Rebase from origin/main | Exactly `git rebase origin/main`; current branch is not `main` or `master`; no rebase/conflict is already in progress. | Any flags, different target, default branch, or in-progress/conflicted rebase. |
 | Feature-branch push | Exactly `git push origin HEAD` or a current non-default branch to the same-named remote branch; no force, tags, delete, refspec rewrite, or alternate remote. | Default branch, a different remote/refspec, any force/delete/tag option, or unknown branch state. |
 | Pull-request creation | `gh pr create` for the current non-default branch against the same GitHub origin; the base is `main` or `master`. | Different repository/head/base, administrative options, a non-GitHub remote, or unsupported command form. |
@@ -50,7 +52,8 @@ All commands below require the trusted-worktree boundary.
 The preflight uses read-only Git queries only: repository root, current branch,
 origin URL, default-branch comparison, status/rebase state, and the diff for
 `package.json` plus `yarn.lock`. It does not read file
-contents or execute a project script itself.
+contents or execute a project script itself; for `trustedScripts` it only lists
+tracked, changed and untracked paths under the listed scripts' directories.
 
 ## Jev's role
 

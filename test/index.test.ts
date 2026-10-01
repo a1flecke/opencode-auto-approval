@@ -44,6 +44,8 @@ describe("preflight routing coverage", () => {
 
 describe("approval plugin options", () => {
   test("defaults to the calibrated Jev allow threshold", () => {
+    expect(resolveOptions({}).trustedScripts).toEqual([]);
+    expect(resolveOptions({ trustedScripts: ["scripts/a.sh", "../x.sh", "scripts/*.sh", 3] }).trustedScripts).toEqual(["scripts/a.sh"]);
     expect(resolveOptions({})).toMatchObject({
       model: "jev-1.13-free",
       apiKeyEnvVar: "OPENCODE_GO_API_KEY",
