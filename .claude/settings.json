@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mise run test)",
+      "Bash(mise install)",
+      "Bash(mise exec -- bash scripts/check-private-content.sh)",
+      "Bash(mise exec -- bash scripts/check-package-contents.sh)",
+      "Bash(sh scripts/verify-before-push.sh*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ],
+    "ask": [
+      "Edit(.github/**)",
+      "Write(.github/**)",
+      "Edit(scripts/configure-repo.sh)",
+      "Edit(SECURITY.md)",
+      "Edit(LICENSE)",
+      "Edit(package.json)",
+      "Edit(mise.toml)",
+      "Bash(git push*)",
+      "Bash(gh pr create*)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push origin main*)",
+      "Bash(git commit*--no-verify*)",
+      "Bash(git push*--no-verify*)",
+      "Bash(git tag*)",
+      "Bash(git push*--tags*)",
+      "Bash(gh release*)",
+      "Bash(gh repo edit*)",
+      "Bash(gh repo delete*)",
+      "Bash(gh api*rulesets*)",
+      "Bash(gh api*-X*)",
+      "Bash(rm -rf*)",
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.local.json)"
+    ]
+  }
+}
