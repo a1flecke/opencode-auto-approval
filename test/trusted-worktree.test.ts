@@ -44,7 +44,7 @@ function decideScript(command: string, overrides: Partial<WorktreeMetadata> = {}
 describe("trusted scripts", () => {
   test.each([
     "./scripts/check-rules.sh",
-    "./scripts/check-rules.sh src/systems/espionage-turn.ts",
+    "./scripts/check-rules.sh src/core/example.ts",
     "./scripts/check-rules.sh src/a.ts src/b.ts",
   ])("allows a listed, unchanged script: %s", (command) => {
     expect(decideScript(command)).toMatchObject({ kind: "allow", category: "trusted-script" });
