@@ -4,8 +4,11 @@ name: Release
 # semantic-release: feat -> minor, fix/perf -> patch, a BREAKING CHANGE footer
 # -> major; other types release nothing. There is no manual approval step. The
 # gates are branch protection (PR + code-owner review + required checks), the
-# verify job below, and the tag ruleset (the Actions app must be on its bypass
-# list). The package.json version in git is a placeholder: semantic-release
+# verify job below, and the tag ruleset. The default GITHUB_TOKEN cannot bypass
+# a ruleset, so the tag push uses a short-lived token minted from a dedicated
+# GitHub App (Contents: write, this repo only) that is the tag ruleset's only
+# bypass actor. Its credentials live in the `release` environment, which is
+# restricted to `main` and has no required reviewers. The package.json version in git is a placeholder: semantic-release
 # stamps the real version into the packed tarball, never into a commit. The
 # GitHub release is published last so that GitHub's immutable-releases setting
 # locks the tag and every asset the moment it goes public.
@@ -53,6 +56,8 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Holds the release App credentials; restricted to main, no approval step.
+    environment: release
     permissions:
       contents: write       # push the tag, create the release
       packages: write       # publish to GitHub Packages
@@ -74,11 +79,23 @@ jobs:
       - name: Install release tooling
         run: mise exec -- npm ci --ignore-scripts
 
+      # Short-lived (<= 1h) installation token scoped to this repository with
+      # Contents: write only. Needed because the ruleset that protects tags
+      # cannot be bypassed by the default GITHUB_TOKEN.
+      - name: Create release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       # Tags the commit and creates a DRAFT release with the tarball attached.
       # Does nothing when no commit since the last tag is releasable.
       - name: Run semantic-release
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: mise exec -- npx --no-install semantic-release
 
       - name: Detect a new release

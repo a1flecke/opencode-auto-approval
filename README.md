@@ -63,8 +63,14 @@ rejects it). `docs`, `test`, `ci`, `chore`, `refactor`, `build`, and `style`
 release nothing. Merging such a PR to `main` is the whole release. The
 `version` in `package.json` is a placeholder in git; the real version is
 stamped into the released tarball and the tag, never committed. The
-repository's tag ruleset must list the GitHub Actions app as a bypass actor so
-the workflow can push the tag. If the publish step fails after the tag and
+default `GITHUB_TOKEN` cannot bypass a ruleset, so the tag push uses a
+short-lived token minted from a dedicated GitHub App. One-time setup: create
+an App owned by you with only `Contents: read & write` (no webhook), install it
+on this repository only, add it to the tag ruleset's bypass list (always), and
+store its App ID and private key as `RELEASE_APP_ID` and
+`RELEASE_APP_PRIVATE_KEY` secrets of a `release` environment limited to the
+`main` branch, with no required reviewers. Nothing else can create release
+tags. If the publish step fails after the tag and
 draft release exist, fix the cause and publish the draft by hand, or land a
 new `fix` commit.
 
