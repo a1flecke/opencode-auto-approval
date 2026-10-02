@@ -175,7 +175,7 @@ Registered in `~/.config/opencode/opencode.jsonc`:
       "trustedRoots": ["/home/user/dev"],
       "trustedRemoteHosts": ["github.com"],
       "defaultBranches": ["main", "master"],
-      "trustedScripts": ["scripts/check-src-rule-violations.sh"]
+      "trustedScripts": ["scripts/check-rules.sh"]
     }
   }
 ]
@@ -219,7 +219,7 @@ Registered in `~/.config/opencode/opencode.jsonc`:
 
 Any project script not in `trustedScripts` is judged by the reviewer, which
 usually asks. A listed script (for example
-`./scripts/check-src-rule-violations.sh src/systems/turn.ts`) runs without
+`./scripts/check-rules.sh src/core/example.ts`) runs without
 prompting only when all hold: the worktree is trusted; the command is the
 exact `./<listed path>` followed only by explicit non-secret, non-glob,
 in-worktree path arguments (no flags, no shell composition); the script is
