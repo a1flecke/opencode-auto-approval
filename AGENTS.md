@@ -35,6 +35,8 @@ sh scripts/setup-git-hooks.sh                 # once per clone: enable .githooks
 | `index.ts` | Plugin entry: the `evaluate` hook, option parsing, routing between preflight and reviewer |
 | `policy.ts` | Pure classification: sensitive-even-if-allowed categories, secret redaction |
 | `trusted-worktree.ts` | Pure deterministic decisions for the small trusted-worktree workflow |
+| `output-filters.ts` | Pure parser for the closed grammar of read-only output filters (`2>&1`, `tail`, `head`, `grep`, `wc -l`) allowed after an allowed command |
+| `shell-words.ts` | Quote-aware word splitter shared by the pure decision modules |
 | `workflow-preflight.ts` | Resolves the session directory and runs the deterministic decision |
 | `git-metadata.ts` | Read-only Git probes feeding the preflight |
 | `reviewer.ts` | The model reviewer for everything the preflight does not own |

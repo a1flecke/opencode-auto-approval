@@ -131,6 +131,9 @@ Layer 3 — THIS PLUGIN
   secret redaction.
 - `trusted-worktree.ts` — pure, auditable decision rules for normal Git/Yarn
   workflow commands; it neither executes commands nor reads files.
+- `output-filters.ts` and `shell-words.ts` — the closed grammar of read-only
+  output filters accepted after an allowed command, and the quote-aware word
+  splitter it shares with `trusted-worktree.ts`.
 - `git-metadata.ts` and `workflow-preflight.ts` — fixed read-only Git probes
   and the runtime adapter that supplies their results to the pure rules.
 - `test/` — `bun test` suite for options, policy, and reviewer behavior. No
@@ -228,7 +231,8 @@ usually asks. A listed script (for example
 `./scripts/check-rules.sh src/core/example.ts`) runs without
 prompting only when all hold: the worktree is trusted; the command is the
 exact `./<listed path>` followed only by explicit non-secret, non-glob,
-in-worktree path arguments (no flags, no shell composition); the script is
+in-worktree path arguments (no flags, no shell composition beyond the
+[read-only output filters](#read-only-output-filters)); the script is
 tracked by Git; and nothing under the script's directory differs from `HEAD`
 or is untracked/ignored. A modified or untracked script is a guard ask, so it
 also overrides a stored "Allow always". A script file the agent has committed
@@ -270,8 +274,9 @@ allowlist:
 - `git rebase origin/main` only on a nondefault branch with no rebase or merge
   conflict already in progress.
 - The initial rebase must use that exact direct command. `GIT_EDITOR=true` is
-  reserved for `git rebase --continue`; output filtering or other shell
-  composition around either form prompts.
+  reserved for `git rebase --continue`; other shell composition around either
+  form prompts, and so does any output filter after the `GIT_EDITOR=true`
+  forms.
 - `git push origin HEAD` or `git push origin <current-feature-branch>` only
   from a nondefault branch, without flags, force, tags, deletion, or refspec
   rewrite. After a completed rebase, the exact lease-protected form
@@ -281,9 +286,46 @@ allowlist:
 - `gh pr create --base main|master --head <current-feature-branch>` with any of `--fill`, `--draft`, `--title "…"`, `--body "…"`, `--body-file <safe path>` (each at most once; plain quotes, no `$`, backticks, `;`, `|`, or backslashes, so use `--body-file` for rich bodies). `--repo`, `--web`, reviewers, and other flags prompt.
   only from a nondefault branch.
 
+Any command above may be followed by the [read-only output
+filters](#read-only-output-filters) agents use to bound a transcript.
+
 Every near miss remains `ask`: a new dependency, another remote, default
 branch work, an added flag, shell chaining, an unfamiliar command, or an
 unverifiable Git state. Hard-deny policies still win before this plugin.
+
+### Read-only output filters
+
+Agents rarely run a build or test bare; they write
+`./scripts/run-with-mise.sh yarn build 2>&1 | tail -20`. A command this
+preflight already allows may therefore be followed by a tiny, closed grammar of
+output filters, and by nothing else:
+
+```
+<allowed command> [2>&1] | <filter> [| <filter> [| <filter>]]
+filter := tail -N | tail -n N | head -N | head -n N      (N is 1..10000)
+        | grep [-E|-F|-i|-v|-n|-c]... <one quoted or plain pattern>
+        | wc -l
+```
+
+- The left-hand command is judged exactly as if the filters were absent: same
+  canonical form, same guards. A filter never makes a non-allowed command
+  allowed, and a guard ask on the left-hand command still wins.
+- Filters read stdin only: no file operands, no `-f`/`--follow`, no `-r`/`-R`,
+  no `grep -f`, no `--include`. At most three filters; `2>&1` only as the single
+  token right after the command.
+- Pipes are split outside quotes only, so `grep -E "FAIL|passed"` is one
+  filter. Backslashes, `$`, backticks, newlines, `<`, `>`, `;`, `&`, `(`, `)` and
+  `#` comments are rejected everywhere (so a `$` regex anchor is not accepted),
+  and a plain pattern may use only letters, digits and `_.:@%+,=/-`, so the shell
+  can never glob or expand it into a file operand.
+- Still prompts: `tee`, `> file`, `>> file`, `;`, `&&`, `||`, subshells,
+  `cd dir &&` prefixes, and every other filter (`awk`, `sed`, `sort`, `xargs`,
+  `cut`, `sh`, ...). A rejected filter form is an ordinary prompt, never one
+  that overrides a stored "Allow always". A bare `2>&1` with no filter is not
+  part of the grammar and behaves as before.
+
+Filtered output is only what the already-allowed command printed, so the
+filters cannot reveal more than the command itself could.
 
 ### Worktree resolution
 

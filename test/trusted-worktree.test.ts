@@ -335,3 +335,143 @@ test("a guard ask survives outside a trusted worktree", () => {
 test("a guard ask survives outside a trusted worktree", () => {
   expect(decide("git push origin main", { directory: "/tmp/p", root: "/tmp/p" })).toMatchObject({ kind: "ask", guard: true });
 });
+
+describe("read-only output filters after an allowed command", () => {
+  const filters = [
+    "2>&1 | tail -20",
+    "| tail -n 20",
+    "| head -30",
+    "| wc -l",
+    '| grep -E "FAIL|passed"',
+    '2>&1 | grep -E "FAIL|passed" | head -30',
+    "2>&1 | grep -v ok | grep -i fail | tail -5",
+  ];
+
+  const families: ReadonlyArray<readonly [string, string, Partial<WorktreeMetadata>]> = [
+    ["./scripts/run-with-mise.sh yarn build", "project-verification", {}],
+    ["./scripts/run-with-mise.sh yarn test", "project-verification", {}],
+    ["./scripts/run-with-mise.sh yarn test:durable", "project-verification", {}],
+    ["./scripts/run-with-mise.sh yarn install", "locked-install", {}],
+    ["git blame -L 1,20 src/a.ts", "git-blame", {}],
+    ["git add src/a.ts", "stage-explicit-files", {}],
+    ["git fetch origin", "fetch-origin", {}],
+    ["git push origin HEAD", "push-feature-branch", {}],
+    ["gh pr create --base main --head feature/x --fill", "create-pull-request", {}],
+    ["./scripts/check-rules.sh src/core/example.ts", "trusted-script", { scriptProbe: cleanProbe }],
+  ];
+
+  for (const [command, category, overrides] of families) {
+    test.each(filters)(`allows ${command} ${"%s"}`, (filter) => {
+      const decision = evaluateTrustedWorkflow(`${command} ${filter}`, fixture(overrides), scriptOptions);
+      expect(decision).toMatchObject({ kind: "allow", category });
+    });
+  }
+
+  test("the allow keeps the left-hand command's category and says filters were accepted", () => {
+    const decision = decide("./scripts/run-with-mise.sh yarn build 2>&1 | tail -20");
+    expect(decision).toMatchObject({ kind: "allow", category: "project-verification" });
+    expect((decision as { reason: string }).reason).toContain("read-only output filters");
+  });
+
+  test.each([
+    "| tail -f",
+    "| tail -20 build.log",
+    "| tail 20",
+    "| grep -r x",
+    "| grep -f patterns",
+    "| grep x file",
+    "| grep -E \"x$\"",
+    "| grep \"$(whoami)\"",
+    "| grep \"`whoami`\"",
+    "| grep \"unterminated",
+    "| tee out",
+    "> out.log",
+    "2>&1 > out.log",
+    "| tail -5 > out.log",
+    "| sh",
+    "| xargs rm",
+    "| awk 1",
+    "| sed s/a/b/",
+    "| sort",
+    "; echo $?",
+    "| tail -5; echo $?",
+    "&& other",
+    "| tail -5 && other",
+    "|| other",
+    "& | tail -5",
+    "| grep a | grep b | grep c | head -5",
+  ])("near-miss still asks (shape ask, never a guard): ./scripts/run-with-mise.sh yarn build %s", (suffix) => {
+    const decision = decide(`./scripts/run-with-mise.sh yarn build ${suffix}`);
+    expect(decision.kind).toBe("ask");
+    expect((decision as { guard?: true }).guard).toBeUndefined();
+  });
+
+  test("a quoted pipe inside the left-hand command is not a filter pipeline", () => {
+    expect(decide('gh pr create --base main --head feature/x --title "a | b" --body x | tail -5').kind).toBe("ask");
+  });
+
+  test("a filter never makes a command that is not otherwise allowed allowed", () => {
+    for (const command of [
+      "./scripts/run-with-mise.sh yarn test tests/x.test.ts",
+      "./scripts/run-with-mise.sh yarn install extra",
+      "git add .",
+      "git push origin --tags",
+      "git blame ../other.ts",
+      "git fetch --all",
+    ]) {
+      expect(decide(`${command} 2>&1 | tail -20`).kind).toBe("ask");
+    }
+  });
+
+  test("a left-hand command the preflight does not own behaves exactly as without a pipe", () => {
+    for (const command of ["ls -la", "yarn test", "cat README.md", "rm -rf build"]) {
+      expect(decide(`${command} 2>&1 | tail -20`)).toEqual({ kind: "unrecognized" });
+      expect(decide(command)).toEqual({ kind: "unrecognized" });
+    }
+  });
+
+  test("an owned command that is not canonical keeps asking with a command-shape reason, not the reviewer path", () => {
+    const decision = decide("./scripts/run-with-mise.sh yarn test tests/x.test.ts 2>&1 | tail -20");
+    expect(decision).toMatchObject({ kind: "ask", category: "command-shape" });
+  });
+
+  test("a guard ask on the left-hand command still wins", () => {
+    expect(decide("git push origin main 2>&1 | tail -5", { branch: "main" })).toMatchObject({ kind: "ask", guard: true });
+    expect(decide("git push origin fork-branch | tail -5")).toMatchObject({ kind: "ask", guard: true });
+    expect(decide("git add .env | head -5")).toMatchObject({ kind: "ask", guard: true });
+    expect(decide("git blame .env | head -5")).toMatchObject({ kind: "ask", guard: true });
+    expect(decideScript("./scripts/check-rules.sh | tail -5", { scriptProbe: { tracked: [], dirty: [] } })).toMatchObject({
+      kind: "ask",
+      guard: true,
+    });
+  });
+
+  test("the trusted boundary still applies to the left-hand command", () => {
+    const decision = decide("./scripts/run-with-mise.sh yarn build 2>&1 | tail -20", { directory: "/tmp/p", root: "/tmp/p" });
+    expect(decision).toMatchObject({ kind: "ask" });
+    expect((decision as { guard?: true }).guard).toBeUndefined();
+  });
+
+  test("commands without a pipe are unchanged, including a bare 2>&1", () => {
+    expect(decide("./scripts/run-with-mise.sh yarn build 2>&1")).toEqual({ kind: "unrecognized" });
+    expect(decide("./scripts/run-with-mise.sh yarn build")).toMatchObject({ kind: "allow" });
+  });
+
+  test("a batch of two commands is never filtered", () => {
+    const metadata = fixture();
+    expect(
+      evaluateTrustedWorkflowBatch(["git add src/a.ts", "git rebase --continue | tail -5"], metadata, options).kind,
+    ).toBe("ask");
+  });
+
+  test("a single filtered command is accepted through the batch entry point", () => {
+    expect(
+      evaluateTrustedWorkflowBatch(["./scripts/run-with-mise.sh yarn build 2>&1 | tail -20"], fixture(), options),
+    ).toMatchObject({ kind: "allow", category: "project-verification" });
+  });
+
+  test("a filtered rebase continuation is not accepted", () => {
+    const metadata = fixture({ rebaseActive: true, hasUnresolvedConflicts: true, unresolvedConflictFiles: ["src/a.ts"] });
+    expect(evaluateTrustedWorkflowBatch(["GIT_EDITOR=true git rebase --continue | tail -5"], metadata, options).kind).toBe("ask");
+  });
+});

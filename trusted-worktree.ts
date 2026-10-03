@@ -5,6 +5,9 @@
  * audit and unit test.
  */
 
+import { splitOutputFilters } from "./output-filters.js";
+import { shellWords } from "./shell-words.js";
+
 export interface TrustedWorkflowOptions {
   readonly trustedRoots: readonly string[];
   readonly trustedRemoteHosts: readonly string[];
@@ -214,34 +217,6 @@ function isSafeStagePath(path: string): boolean {
   if (path.length === 0 || path === "." || path === ".." || path.startsWith("/") || path.startsWith("~")) return false;
   if (path.includes("../") || path.includes("/..") || /[*?{}\[\]]/.test(path)) return false;
   return !SECRET_PATH.test(path);
-}
-
-/** Splits on whitespace, honoring plain '...' and "..." quotes. Backslashes and unbalanced quotes yield null. */
-function shellWords(command: string): string[] | null {
-  if (command.includes("\\")) return null;
-  const words: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  let started = false;
-  for (const ch of command) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-      started = true;
-    } else if (/\s/.test(ch)) {
-      if (started) words.push(current);
-      current = "";
-      started = false;
-    } else {
-      current += ch;
-      started = true;
-    }
-  }
-  if (quote) return null;
-  if (started) words.push(current);
-  return words;
 }
 
 /**
@@ -479,9 +454,23 @@ export function evaluateTrustedWorkflow(
 ): WorkflowDecision {
   const normalized = command.trim();
   if (normalized.length === 0) return { kind: "unrecognized" };
+
+  const split = splitOutputFilters(normalized);
+  if (split.kind === "filtered") {
+    // The left-hand command is judged exactly as if the filters were absent.
+    // Filters only ever bound what the agent sees of its output, so they can
+    // pass an allow through or let a guard ask win, and nothing else.
+    const decision = evaluateTrustedWorkflow(split.command, metadata, options);
+    if (decision.kind === "allow") {
+      return { ...decision, reason: `${decision.reason} Its output is bounded by read-only output filters.` };
+    }
+    if (decision.kind === "ask") return decision;
+    // Not a command this preflight owns: behave exactly as for any composition.
+  }
+
   if (SHELL_COMPOSITION.test(normalized)) {
     return isTrustedWorkflowCandidate(normalized, options)
-      ? ask("command-shape", "Automatic workflow commands cannot contain shell composition or expansion.")
+      ? ask("command-shape", "Automatic workflow commands cannot contain shell composition or expansion, except a closed set of read-only output filters (tail, head, grep, wc -l) after an allowed command.")
       : { kind: "unrecognized" };
   }
 

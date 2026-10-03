@@ -40,7 +40,7 @@ All commands below require the trusted-worktree boundary.
 
 | Family | Required preconditions | Still asks when |
 | --- | --- | --- |
-| Locked install | The command is the project wrapper followed by `yarn install`; `package.json` and `yarn.lock` are unchanged from `HEAD`. | Manifest/lockfile changed, alternate package manager/source, or extra shell syntax. |
+| Locked install | The command is the project wrapper followed by `yarn install`; `package.json` and `yarn.lock` are unchanged from `HEAD`. | Manifest/lockfile changed, alternate package manager/source, or extra shell syntax (other than read-only output filters). |
 | Test/build | The command is the project wrapper followed by `yarn test`, `yarn test:*`, `yarn build`, `yarn build:*`, or `yarn verify:*`. | Wrapper is absent, arbitrary shell is appended, or the worktree is untrusted. |
 | Stage explicit files | `git add <one-or-more explicit paths>`, with an optional standalone `--`; every path is within the worktree, is not secret-like, and is not a broad selector. | Any option other than `--`, `.`/`-A`/`-u`, glob-like/broad staging, external path, a `.env*` file, `.npmrc`, `.netrc`, `.pypirc`, `credentials.json`, any path under `.ssh`, or a `*.pem`/`*.key` file. |
 | Trusted project script | `./<path>` exactly as listed in the user-config `trustedScripts`, plus explicit non-secret in-worktree path arguments only; the script is tracked and nothing under its directory differs from `HEAD` or is untracked/ignored. | Unlisted script (reviewer decides), flags, composition, unsafe arguments, modified/untracked script (guard ask), or a failed probe. |
@@ -48,6 +48,33 @@ All commands below require the trusted-worktree boundary.
 | Rebase from origin/main | Exactly `git rebase origin/main`; current branch is not `main` or `master`; no rebase/conflict is already in progress. | Any flags, different target, default branch, or in-progress/conflicted rebase. |
 | Feature-branch push | Exactly `git push origin HEAD` or a current non-default branch to the same-named remote branch; no force, tags, delete, refspec rewrite, or alternate remote. | Default branch, a different remote/refspec, any force/delete/tag option, or unknown branch state. |
 | Pull-request creation | `gh pr create` for the current non-default branch against the same GitHub origin; the base is `main` or `master`; only `--fill`, `--draft`, `--title`, `--body`, `--body-file <safe path>` are accepted, each once. | Different repository/head/base, `--repo`/`--web`/reviewer or other options, composition inside a body (use `--body-file`), a non-GitHub remote, or unsupported command form. |
+
+### Read-only output filters
+
+Any family above may be followed by a closed grammar of output filters, because
+agents bound transcripts with `2>&1 | tail -20` and similar:
+
+```
+<allowed command> [2>&1] | <filter> [| <filter> [| <filter>]]
+filter := tail -N | tail -n N | head -N | head -n N   (N in 1..10000)
+        | grep [-E|-F|-i|-v|-n|-c]... <one quoted or plain pattern>
+        | wc -l
+```
+
+The left-hand command is evaluated by the existing decision exactly as if the
+filters were absent, so a filter never makes a non-allowed command allowed and
+a guard ask on the left-hand command still wins. Filters read stdin only (no
+file operands, `-f`/`--follow`, `-r`/`-R`, `grep -f`, `--include`). The line is
+split on unquoted `|` only; backslash, `$`, backtick, newline, `<`, `>`, `;`,
+`&`, `(`, `)` and `#` comments are rejected anywhere, and a plain (unquoted)
+pattern is limited to characters the shell never expands, so a glob cannot
+become a file operand. `2>&1` is accepted only as the last token of the command,
+before the first pipe, and only together with at least one filter. Anything else
+(including `tee`, `> file`, `;`, `&&`, `||`, `cd dir &&`, a fourth filter, or
+`awk`/`sed`/`sort`/`xargs`) is the same non-guard `command-shape` ask as before,
+so it never newly prompts a command a stored approval allowed. The filters only
+shape what the agent sees of output the allowed command already produced; they
+cannot widen what that command could reveal.
 
 The preflight uses read-only Git queries only: repository root, current branch,
 origin URL, default-branch comparison, status/rebase state, and the diff for
@@ -68,7 +95,8 @@ requests; deterministic local checks are more reliable for those cases.
 - No preflight path can turn a hard configured denial into an allow.
 - Any missing session/worktree/Git metadata results in `ask`.
 - The parser accepts only a single supported command, never `;`, `&&`, `||`,
-  pipes, redirection, command substitution, or shell-variable expansion.
+  redirection to a file, command substitution, or shell-variable expansion. The
+  only pipes accepted are the read-only output filters above.
 - Preflight output and storage contain categories/reasons only—never command
   output, secret values, or credentials.
 - The preflight does not call the network or execute the proposed command.
