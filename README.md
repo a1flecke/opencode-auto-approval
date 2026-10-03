@@ -41,7 +41,7 @@ linted with zizmor, default `GITHUB_TOKEN` permissions denied):
   [semantic-release](https://github.com/semantic-release/semantic-release) over
   the Conventional Commits since the last tag. If any is releasable it tags the
   commit, packs the tarball once, creates a **draft** GitHub release with the
-  tarball and its `.sha256` checksum, attests build provenance, publishes the package to GitHub Packages,
+  tarball, attests build provenance, attaches the `.sha256` checksum and the attestation bundle (`.intoto.jsonl`) to the draft, publishes the package to GitHub Packages,
   and publishes the release **last**. No manual approval step.
 - `commit-messages` (in `ci.yml`) — every commit in a PR must be a Conventional
   Commit, because rebase merges keep each commit on `main`.
@@ -51,7 +51,7 @@ GitHub's immutable-releases setting; a ruleset blocks moving, deleting, or
 creating `v*` tags except by admins; the workflow refuses to touch an existing
 release; and a package version that already exists is never republished.
 Verify a download with
-`gh attestation verify <tarball> --repo <owner>/<repo>` and `sha256sum -c <tarball>.sha256`.
+`gh attestation verify <tarball> --repo <owner>/<repo>` (or offline with `--bundle <tarball>.intoto.jsonl`) and `sha256sum -c <tarball>.sha256`.
 To fix a bad release, ship a new version; never rewrite the old one.
 
 **Before pushing:** run `sh scripts/setup-git-hooks.sh` once per clone; the tracked `pre-push` hook then runs `scripts/verify-before-push.sh` (private-content scan, package check, tests).
