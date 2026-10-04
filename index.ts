@@ -386,6 +386,14 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
               reason: "Trusted-worktree verification failed; human approval is required.",
             };
           }
+          if (options.debug) {
+            // Never logs the command itself: only which path produced the outcome.
+            console.error(
+              workflow.kind === "unrecognized"
+                ? `[model-approval] preflight action=${event.action} sensitive=${sensitivity.category ?? "n/a"} unrecognized reason=not a trusted-workflow candidate; falling through to the reviewer`
+                : `[model-approval] preflight action=${event.action} sensitive=${sensitivity.category ?? "n/a"} decision=${workflow.kind} category=${workflow.category} reason=${workflow.reason}`,
+            );
+          }
           if (workflow.kind !== "unrecognized") {
             const latencyMs = Date.now() - startedAt;
             event.effect = workflow.kind;

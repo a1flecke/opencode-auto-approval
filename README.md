@@ -206,7 +206,11 @@ Registered in `~/.config/opencode/opencode.jsonc`:
   sent, so injected tool output can't pose as a user instruction.
 - `debug` — off by default. When `true`, logs one line per reviewed check to
   stderr (action, sensitivity category, decision, latency, reason) — no
-  secret values, since everything is redacted before logging too. Does not
+  secret values, since everything is redacted before logging too. It also logs
+  one line per preflight check (the decision, category and reason, or
+  `unrecognized … not a trusted-workflow candidate` when the command fell
+  through to the reviewer), never the command text, so a pattern miss is easy
+  to tell from a reviewer decline. Does not
   persist full conversation text anywhere; `ctx.storage` only ever holds the
   small aggregate counters below.
 - `threshold` — 0.85. Jev must meet or exceed it on **all five** checks:
