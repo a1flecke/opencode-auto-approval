@@ -315,16 +315,20 @@ function commandFamily(command: string, metadata: WorktreeMetadata, options: Tru
   if (tokens[0] === "git" && tokens[1] === "rebase") return ask("rebase-origin-main", "Only an exact rebase onto origin/main is automatic.");
 
   if (tokens[0] === "git" && tokens[1] === "ls-remote") {
-    const expected = `git ls-remote origin refs/heads/${metadata.branch}`;
-    return command === expected && !isDefaultBranch(metadata.branch, options)
+    const isRemoteRefInspection =
+      tokens.length === 4 &&
+      tokens[2] === "origin" &&
+      (tokens[3] === `refs/heads/${metadata.branch}` ||
+        options.defaultBranches.some((b) => tokens[3] === b || tokens[3] === `refs/heads/${b}`));
+    return isRemoteRefInspection
       ? {
           kind: "allow",
           category: "inspect-remote-feature-branch",
-          reason: "Read-only inspection of the current feature branch on the trusted origin.",
+          reason: "Read-only inspection of the current feature branch or a default branch on the trusted origin.",
         }
       : ask(
           "inspect-remote-feature-branch",
-          "Automatic remote inspection is limited to the current feature branch on origin.",
+          "Automatic remote inspection is limited to the current feature branch or a default branch on origin.",
         );
   }
 
