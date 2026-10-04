@@ -258,7 +258,9 @@ its `origin` is a listed host, and the command has no shell
 composition/expansion. This is an exact command allowlist, not a prefix
 allowlist:
 
-- `./scripts/run-with-mise.sh yarn test`, `build`, or `verify:*`; and an exact
+- `./scripts/run-with-mise.sh yarn test`, `build`, or `verify:*` (the exact
+  spelling `bash scripts/run-with-mise.sh yarn …` is treated as the same
+  command; no `bash` flags, other paths, or `bash ./…`); and an exact
   `yarn install` only if `package.json` and `yarn.lock` are unchanged from
   `HEAD` and neither is untracked.
 - `git blame` of exactly one explicit, non-secret in-worktree file, with only

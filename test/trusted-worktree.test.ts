@@ -406,6 +406,28 @@ describe("read-only output filters after an allowed command", () => {
     expect((decision as { guard?: true }).guard).toBeUndefined();
   });
 
+  test.each([
+    ["bash scripts/run-with-mise.sh yarn install", "locked-install"],
+    ["bash scripts/run-with-mise.sh yarn test", "project-verification"],
+    ["bash scripts/run-with-mise.sh yarn verify:impact", "project-verification"],
+    ["bash scripts/run-with-mise.sh yarn build 2>&1 | tail -20", "project-verification"],
+  ])("`bash scripts/…` spelling is the same canonical command: %s", (command, category) => {
+    expect(isTrustedWorkflowCandidate(command)).toBe(true);
+    expect(decide(command)).toMatchObject({ kind: "allow", category });
+  });
+
+  test.each([
+    "bash -c scripts/run-with-mise.sh yarn build",
+    "bash ./scripts/run-with-mise.sh yarn build",
+    "bash -x scripts/run-with-mise.sh yarn build",
+    "bash /abs/scripts/run-with-mise.sh yarn build",
+    "bash scripts/run-with-mise.sh yarn test tests/x.test.ts",
+    "bash scripts/run-with-mise.sh yarn build && other",
+    "bash scripts/run-with-mise.sh yarn dev",
+  ])("`bash` variants and near-misses do not newly allow: %s", (command) => {
+    expect(decide(command).kind).not.toBe("allow");
+  });
+
   test("a quoted pipe inside the left-hand command is not a filter pipeline", () => {
     expect(decide('gh pr create --base main --head feature/x --title "a | b" --body x | tail -5').kind).toBe("ask");
   });
