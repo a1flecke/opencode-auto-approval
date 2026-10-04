@@ -274,9 +274,11 @@ allowlist:
 - `git add` with one or more explicit, non-secret, non-glob paths (with an
   optional standalone `--`). Broad staging, options, `.env*`, credential
   files, private-key material, and parent/absolute paths prompt.
-- `git fetch origin`, plus a direct `git ls-remote origin refs/heads/<current-
-  feature-branch>` inspection. Other remotes, default-branch refs, refspecs,
-  and shell-composed checks prompt.
+- `git fetch origin`, plus a direct `git ls-remote origin <ref>` inspection, where
+  `<ref>` is `refs/heads/<current-branch>` or a default branch (`main`,
+  `refs/heads/main`; read-only, no more than `git fetch origin` already
+  reveals). Other remotes, flags, other refs, several refs, and shell-composed
+  checks prompt.
 - `git rebase origin/main` only on a nondefault branch with no rebase or merge
   conflict already in progress.
 - The initial rebase must use that exact direct command. `GIT_EDITOR=true` is
