@@ -14,6 +14,7 @@
       "Bash(git push:*)",
       "Bash(git rebase origin/main)",
       "Bash(git rebase --continue)",
+      "Bash(GIT_EDITOR=true git rebase --continue)",
       "Bash(git switch:*)",
       "Bash(git branch:*)",
       "Bash(git fetch:*)",
