@@ -82,13 +82,25 @@ function scriptPathOf(command: string, options: TrustedWorkflowOptions): string 
   return options.trustedScripts?.includes(script) ? script : null;
 }
 
+const BASH_WRAPPER_PREFIX = "bash scripts/run-with-mise.sh yarn ";
+
+/**
+ * `bash scripts/run-with-mise.sh yarn …` runs the same file as
+ * `./scripts/run-with-mise.sh yarn …`. Only that exact prefix is rewritten (no
+ * bash flags, absolute paths, or `bash ./…`); everything after it is judged
+ * unchanged by the canonical-form checks.
+ */
+function canonicalWrapperSpelling(command: string): string {
+  return command.startsWith(BASH_WRAPPER_PREFIX) ? `./scripts/run-with-mise.sh yarn ${command.slice(BASH_WRAPPER_PREFIX.length)}` : command;
+}
+
 /**
  * True only for a command family this deterministic preflight owns. A project
  * script is owned only when the user listed it in `trustedScripts`; any other
  * script stays with the reviewer exactly as before.
  */
 export function isTrustedWorkflowCandidate(command: string, options?: TrustedWorkflowOptions): boolean {
-  const trimmed = command.trim();
+  const trimmed = canonicalWrapperSpelling(command.trim());
   if (options && scriptPathOf(trimmed, options) !== null) return true;
   return /^(?:\.\/scripts\/run-with-mise\.sh yarn (?:install|test|build|verify:)|git (?:add|fetch|ls-remote|rebase|push|blame)(?:\s|$)|GIT_EDITOR=true git rebase(?:\s|$)|gh pr create(?:\s|$))/.test(
     trimmed,
@@ -452,7 +464,7 @@ export function evaluateTrustedWorkflow(
   metadata: WorktreeMetadata,
   options: TrustedWorkflowOptions,
 ): WorkflowDecision {
-  const normalized = command.trim();
+  const normalized = canonicalWrapperSpelling(command.trim());
   if (normalized.length === 0) return { kind: "unrecognized" };
 
   const split = splitOutputFilters(normalized);
