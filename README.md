@@ -190,6 +190,38 @@ Registered in `~/.config/opencode/opencode.jsonc`:
 ]
 ```
 
+### Where to put the plugin directory
+
+OpenCode auto-loads **every folder** under `~/.config/opencode/plugins/` at
+startup, in addition to whatever the `plugins` array lists. A folder there is
+therefore never inert: it is loaded with default options (no `trustedRoots`, no
+reviewer model or key) next to the instance you configured. Several copies of
+this security control then run at once, an old or broken version adds
+`failed to load plugin` noise, and it is unclear how OpenCode combines their
+verdicts.
+
+Keep the unpacked release **outside** `plugins/` and reference it by absolute
+path, for example one directory per version:
+
+```text
+~/.config/opencode/plugin-releases/opencode-auto-approval@<version>/
+```
+
+```jsonc
+{ "package": "/home/user/.config/opencode/plugin-releases/opencode-auto-approval@<version>" }
+```
+
+To upgrade, unpack the new release next to the old one, change the `package`
+path, and restart. To roll back, restore the previous path. Do not unpack
+versions into `plugins/`.
+
+### Verify the install
+
+After a restart, the OpenCode log should show exactly **one** `loading plugin`
+entry for this package and no `failed to load plugin`. More than one entry, or
+an entry for a path you did not configure, means a folder under `plugins/` is
+being auto-loaded; move it out.
+
 - `model` — `jev-1.13-free`, OpenCode's limited-time-free System One model
   for fast structured yes/no decisions. It is not used as a general chat
   model.
@@ -415,7 +447,7 @@ reviewer outage from a genuine safety prompt.
 ## Testing
 
 ```bash
-cd ~/.config/opencode/plugins/model-approval
+cd /path/to/opencode-auto-approval
 mise run test
 ```
 
@@ -430,7 +462,7 @@ command asks.
 ## Disabling / rolling back
 
 **Fastest disable** (keeps everything else): remove the object entry for
-`model-approval` from the `plugins` array in
+this plugin from the `plugins` array in
 `~/.config/opencode/opencode.jsonc`, then restart the service or reopen the
 app. The hard `experimental.policies` block is independent of this plugin
 and will keep working even with the plugin removed.
@@ -443,9 +475,11 @@ cp ~/.config/opencode/backups/opencode.jsonc.bak-<timestamp> ~/.config/opencode/
 ```
 
 (see `ls ~/.config/opencode/backups/` for the exact filename), then restart
-the service. The plugin directory itself
-(`~/.config/opencode/plugins/model-approval/`) can simply be left in place
-unreferenced, or deleted — it has no effect unless listed in `plugins`.
+the service. Do not leave an old plugin directory (for example the legacy
+`~/.config/opencode/plugins/model-approval/`) under `plugins/`: OpenCode
+auto-loads every folder there whether or not the `plugins` array lists it. Move
+it out of `plugins/` (or delete it), then confirm the log shows no unexpected
+`loading plugin` entry.
 
 ## Extending
 
