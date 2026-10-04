@@ -239,17 +239,50 @@ describe("trusted-worktree hook order", () => {
     }
   });
 
-  async function setupWith(preflight: (e: any) => Promise<any>) {
+  async function setupWith(preflight: (e: any) => Promise<any>, options: Record<string, unknown> = {}) {
     let evaluate: ((event: Record<string, any>) => Promise<void>) | undefined;
     const testPlugin = createPlugin({ evaluateTrustedWorktree: preflight as any });
     await testPlugin.setup({
-      options: {},
+      options,
       permission: { async hook(_name: string, handler: (event: Record<string, any>) => Promise<void>) { evaluate = handler; } },
       storage: { async get() { return undefined; }, async set() {} },
       session: { async context() { return []; } },
     });
     return evaluate!;
   }
+
+  async function debugLines(preflight: (e: any) => Promise<any>, debug: boolean, command: string): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => { lines.push(args.join(" ")); };
+    try {
+      const evaluate = await setupWith(preflight, { debug, apiKeyEnvVar: "MODEL_APPROVAL_TEST_MISSING_KEY" });
+      await evaluate({ sessionID: "s", action: "shell", resources: [command], effect: "ask" });
+    } finally {
+      console.error = original;
+    }
+    return lines.filter((line) => line.includes("preflight"));
+  }
+
+  test("debug logs why the preflight did not own a command, without the command text", async () => {
+    const lines = await debugLines(async () => ({ kind: "unrecognized" }), true, "bash -c secret-token-123");
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("not a trusted-workflow candidate");
+    expect(lines.join("\n")).not.toContain("secret-token-123");
+  });
+
+  test("debug logs a preflight decision with its category and reason", async () => {
+    const lines = await debugLines(
+      async () => ({ kind: "allow", category: "project-verification", reason: "Trusted worktree project verification command." }),
+      true,
+      "./scripts/run-with-mise.sh yarn build",
+    );
+    expect(lines[0]).toContain("decision=allow category=project-verification");
+  });
+
+  test("without debug the preflight logs nothing", async () => {
+    expect(await debugLines(async () => ({ kind: "unrecognized" }), false, "git push origin HEAD")).toEqual([]);
+  });
 
   test("a guard ask tightens an already-allowed command (static `git push *` cannot push main)", async () => {
     const evaluate = await setupWith(async () => ({
