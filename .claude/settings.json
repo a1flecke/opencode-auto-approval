@@ -24,6 +24,8 @@
       "Bash(gh pr diff:*)",
       "Bash(gh pr merge:*)",
       "Bash(gh run:*)",
+      "Bash(gh release list*)",
+      "Bash(gh release view*)",
       "Bash(gh issue:*)"
     ],
     "ask": [
@@ -49,7 +51,11 @@
       "Bash(git push*--no-verify*)",
       "Bash(git tag*)",
       "Bash(git push*--tags*)",
-      "Bash(gh release*)",
+      "Bash(gh release create*)",
+      "Bash(gh release edit*)",
+      "Bash(gh release delete*)",
+      "Bash(gh release upload*)",
+      "Bash(gh release delete-asset*)",
       "Bash(gh repo edit*)",
       "Bash(gh repo delete*)",
       "Bash(gh api*rulesets*)",
