@@ -102,6 +102,11 @@ loosen it to get a change through.
 - **Never skip checks.** No `--no-verify`, no disabling or editing hooks or
   workflows to make something pass, no `git push --force`. If a check blocks you,
   fix the cause or ask the maintainer.
+- **Rebasing your own branch is routine.** After `git rebase origin/main` on your
+  own non-default branch, update it with
+  `git push --force-with-lease origin HEAD:<branch>`. That lease form is the only
+  force push allowed, and never for `main`/`master`. Bare `--force`, `-f`, and
+  `+refspec` pushes stay forbidden.
 
 ## Do not do without explicit maintainer approval
 
