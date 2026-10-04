@@ -20,6 +20,8 @@
     "policy.ts",
     "reviewer.ts",
     "trusted-worktree.ts",
+    "output-filters.ts",
+    "shell-words.ts",
     "workflow-preflight.ts",
     "git-metadata.ts",
     "README.md",
