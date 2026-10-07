@@ -505,3 +505,22 @@ describe("read-only output filters after an allowed command", () => {
     expect(evaluateTrustedWorkflowBatch(["GIT_EDITOR=true git rebase --continue | tail -5"], metadata, options).kind).toBe("ask");
   });
 });
+
+
+describe("explicit remote ref inspection", () => {
+  test.each([
+    "git ls-remote origin 'refs/heads/feature/x'",
+    'git ls-remote origin "refs/heads/main"',
+    "git ls-remote origin refs/heads/feature/x refs/heads/main",
+    "git ls-remote origin main 2>&1",
+    "git ls-remote origin 'refs/heads/feature/x' refs/heads/main 2>&1",
+  ])("allows equivalent bounded read-only ref inspection: %s", (command) => {
+    expect(decide(command)).toMatchObject({ kind: "allow", category: "inspect-remote-feature-branch" });
+  });
+  test.each([
+    "git ls-remote origin main refs/heads/other", "git ls-remote upstream main",
+    "git ls-remote origin 'refs/heads/*'", "git ls-remote origin main > output",
+    "git ls-remote origin main 2>&1 2>&1", "git ls-remote origin main 2>&1; touch output",
+    "git ls-remote origin main main main main main", "git ls-remote origin 'unterminated",
+  ])("rejects unsafe or broad inspection: %s", (command) => expect(decide(command).kind).toBe("ask"));
+});

@@ -217,10 +217,12 @@ versions into `plugins/`.
 
 ### Verify the install
 
-After a restart, the OpenCode log should show exactly **one** `loading plugin`
-entry for this package and no `failed to load plugin`. More than one entry, or
-an entry for a path you did not configure, means a folder under `plugins/` is
-being auto-loaded; move it out.
+Check the approver identity and configured release path for each active location,
+with no `failed to load plugin`. OpenCode creates location-scoped plugin instances
+and may reload them; multiple loading lines across a server run are expected.
+An obsolete or unconfigured path is evidence of unintended auto-discovery.
+Confirm recent hook decisions and service readiness as well as loading logs;
+key presence means configured, not proof that inference authenticated.
 
 - `model` — `jev-1.13-free`, OpenCode's limited-time-free System One model
   for fast structured yes/no decisions. It is not used as a general chat
@@ -232,10 +234,14 @@ being auto-loaded; move it out.
   works despite its historical name because the same scoped Console key
   authenticated the Zen endpoint in a live probe.
 - `timeoutMs` — 8000ms. On timeout the check becomes `ask`, never `allow`.
-- `maxContextChars` — 12000 chars of recent user/assistant/system text (most
-  recent first, then re-ordered chronologically for the prompt). Shell/tool
-  output is deliberately excluded from context — only conversation text is
-  sent, so injected tool output can't pose as a user instruction.
+- `maxContextChars` — a 12000-character total conversation budget. Genuine user
+  messages reserve 75% so assistant progress and system updates cannot evict
+  task authorization. Unused user budget is available to recent other text.
+  Oversized entries retain the beginning and end, with an explicit truncation
+  marker; messages are re-ordered chronologically and JSON-quoted so embedded
+  role labels cannot create speakers. Later user restrictions override earlier
+  permission, and truncation remains uncertainty. Shell/tool output is excluded.
+  No conversation text is persisted in plugin storage.
 - `debug` — off by default. When `true`, logs one line per reviewed check to
   stderr (action, sensitivity category, decision, latency, reason) — no
   secret values, since everything is redacted before logging too. It also logs
@@ -244,7 +250,7 @@ being auto-loaded; move it out.
   through to the reviewer), never the command text, so a pattern miss is easy
   to tell from a reviewer decline. Does not
   persist full conversation text anywhere; `ctx.storage` only ever holds the
-  small aggregate counters below.
+  bounded diagnostics described below.
 - `threshold` — 0.85. Jev must meet or exceed it on **all five** checks:
   harmless operation, private-data safety, explicit trusted intent, no
   untrusted-code execution, and narrow authorized effect. This was calibrated
@@ -253,8 +259,8 @@ being auto-loaded; move it out.
   command scored 0.06–0.16.
 - `trustedRoots`, `trustedRemoteHosts`, and `defaultBranches` — the complete
   local trust boundary for deterministic workflow approval. The defaults are
-  the personal development directory, `github.com`, and `main`/`master`.
-  An empty or malformed override falls back to those conservative defaults.
+  no trusted roots, `github.com`, and `main`/`master`.
+  No deterministic worktree approval is available until roots are configured.
 - `trustedScripts` — exact worktree-relative paths of project scripts you have
   vetted (default: none; plain `dir/name` paths only, no globs, `..`, absolute
   or secret-like entries; invalid entries are dropped). See
@@ -306,11 +312,11 @@ allowlist:
 - `git add` with one or more explicit, non-secret, non-glob paths (with an
   optional standalone `--`). Broad staging, options, `.env*`, credential
   files, private-key material, and parent/absolute paths prompt.
-- `git fetch origin`, plus a direct `git ls-remote origin <ref>` inspection, where
-  `<ref>` is `refs/heads/<current-branch>` or a default branch (`main`,
-  `refs/heads/main`; read-only, no more than `git fetch origin` already
-  reveals). Other remotes, flags, other refs, several refs, and shell-composed
-  checks prompt.
+- `git fetch origin`, plus `git ls-remote origin <ref> [<ref> ...]` with one
+  to four explicit refs. Each is `refs/heads/<current-branch>` or a configured
+  default branch (`main`, `refs/heads/main`). Plain quoting and a single terminal
+  `2>&1` are accepted. Other remotes, flags, wildcard refs, unrelated refs,
+  unbounded lists, file redirection and command chains prompt.
 - `git rebase origin/main` only on a nondefault branch with no rebase or merge
   conflict already in progress.
 - The initial rebase must use that exact direct command. `GIT_EDITOR=true` is
@@ -361,8 +367,12 @@ filter := tail -N | tail -n N | head -N | head -n N      (N is 1..10000)
 - Still prompts: `tee`, `> file`, `>> file`, `;`, `&&`, `||`, subshells,
   `cd dir &&` prefixes, and every other filter (`awk`, `sed`, `sort`, `xargs`,
   `cut`, `sh`, ...). A rejected filter form is an ordinary prompt, never one
-  that overrides a stored "Allow always". A bare `2>&1` with no filter is not
-  part of the grammar and behaves as before.
+  that overrides a stored "Allow always". Bare terminal `2>&1` is accepted only
+  for the explicit `git ls-remote` family above; other families behave as before.
+- Scanner-split pipelines must match the validated original command from the
+  exact source shell tool. The resource count, order and token values must agree.
+  Missing/mismatched sources, `;`/`&&` chains, extra operations and unsupported
+  filters ask; the plugin never reconstructs operators by joining resources.
 
 Filtered output is only what the already-allowed command printed, so the
 filters cannot reveal more than the command itself could.
@@ -392,7 +402,7 @@ an ambiguous shell expression, and a source mismatch all remain `ask`.
 - A narrow list of categories is reviewed **even if** Layer 2 or a saved
   "Allow always" approval already resolved it to `allow` — see
   `SENSITIVE_RULES` in `policy.ts` for the exact patterns (currently: PR/issue
-  merge-close-delete, GitHub repo mutation, `gh api` mutations, releases/tags,
+  approve-merge-close-delete, GitHub repo mutation, `gh api` mutations, releases/tags,
   `git reset --hard`, `git clean -f*`, remote branch deletion, rebase/filter,
   auth/login changes, publish/deploy commands, cloud/infra mutations, network
   uploads via curl/wget/scp/rsync, `.env`/credentials-file reads, and
@@ -410,11 +420,20 @@ the explicit deterministic trust decision above.
 ## Observability
 
 `ctx.storage` under key `model-approval:stats` holds a small JSON object:
-`{ reviewed, allow, ask, deny, failures, timeouts, totalLatencyMs }`. `deny`
-remains a legacy counter and is never incremented by Jev. No raw
-commands, no conversation text, no secrets are persisted — just counters, so
-you can sanity-check how often the reviewer is actually firing without
-creating a new leak surface.
+`{ reviewed, allow, ask, deny, failures, malformedOutputs, timeouts, totalLatencyMs }`.
+`deny` remains a legacy counter; exceptions and malformed model payloads are
+counted separately. Ordinary allow fast paths do not increment reviewed.
+Counters persist across versions using the same plugin ID.
+
+`model-approval:recent-decisions` retains up to 100 guard, preflight and reviewer
+outcomes: time, action, category, route, incoming effect, final decision,
+specific reason code, and an optional SHA-256 source tool identity hash.
+No raw tool IDs, commands, paths, conversation text or credentials are stored.
+The hash lets you correlate a known tool ID without persisting it. Script
+integrity, command shape, unsupported refs, reviewer declines (including the
+failed safety check), malformed output and unavailable review have distinct codes.
+`model-approval:last-errors` retains up to ten sanitized exception/malformed
+records. Readiness and counters alone do not prove a useful model assessment.
 
 On every plugin load, `model-approval:service-readiness` records only whether
 the **running OpenCode service process** has the configured key, along with

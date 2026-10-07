@@ -45,6 +45,7 @@ All commands below require the trusted-worktree boundary.
 | Stage explicit files | `git add <one-or-more explicit paths>`, with an optional standalone `--`; every path is within the worktree, is not secret-like, and is not a broad selector. | Any option other than `--`, `.`/`-A`/`-u`, glob-like/broad staging, external path, a `.env*` file, `.npmrc`, `.netrc`, `.pypirc`, `credentials.json`, any path under `.ssh`, or a `*.pem`/`*.key` file. |
 | Trusted project script | `./<path>` exactly as listed in the user-config `trustedScripts`, plus explicit non-secret in-worktree path arguments only; the script is tracked and nothing under its directory differs from `HEAD` or is untracked/ignored. | Unlisted script (reviewer decides), flags, composition, unsafe arguments, modified/untracked script (guard ask), or a failed probe. |
 | Blame | `git blame` of one explicit non-secret file with only `-L`, `-w`, `-s`, `-e`, `--`. | Other flags, several files, secret-like or external path. |
+| Remote ref inspection | `git ls-remote origin` with one to four quoted or plain explicit refs, each the current feature ref or a configured default branch; optional single terminal `2>&1`. | Other remotes/refs, wildcard selectors, flags, more than four refs or file redirection. |
 | Rebase from origin/main | Exactly `git rebase origin/main`; current branch is not `main` or `master`; no rebase/conflict is already in progress. | Any flags, different target, default branch, or in-progress/conflicted rebase. |
 | Feature-branch push | Exactly `git push origin HEAD` or a current non-default branch to the same-named remote branch; no force, tags, delete, refspec rewrite, or alternate remote. | Default branch, a different remote/refspec, any force/delete/tag option, or unknown branch state. |
 | Pull-request creation | `gh pr create` for the current non-default branch against the same GitHub origin; the base is `main` or `master`; only `--fill`, `--draft`, `--title`, `--body`, `--body-file <safe path>` are accepted, each once. | Different repository/head/base, `--repo`/`--web`/reviewer or other options, composition inside a body (use `--body-file`), a non-GitHub remote, or unsupported command form. |
@@ -69,12 +70,19 @@ split on unquoted `|` only; backslash, `$`, backtick, newline, `<`, `>`, `;`,
 `&`, `(`, `)` and `#` comments are rejected anywhere, and a plain (unquoted)
 pattern is limited to characters the shell never expands, so a glob cannot
 become a file operand. `2>&1` is accepted only as the last token of the command,
-before the first pipe, and only together with at least one filter. Anything else
+before the first pipe. Explicit remote-ref inspection also accepts one terminal
+`2>&1` without a filter. Anything else
 (including `tee`, `> file`, `;`, `&&`, `||`, `cd dir &&`, a fourth filter, or
 `awk`/`sed`/`sort`/`xargs`) is the same non-guard `command-shape` ask as before,
 so it never newly prompts a command a stored approval allowed. The filters only
 shape what the agent sees of output the allowed command already produced; they
 cannot widen what that command could reveal.
+
+At the runtime boundary, scanner-split filter resources are bound to the exact
+source shell tool call. Its original command must pass the closed pipeline grammar,
+and every scanner resource must match the expected stage in order. The adapter
+never invents pipe operators from independent resources; missing sources, extra
+commands and mismatches ask. Safety guards still apply to the command being filtered.
 
 The preflight uses read-only Git queries only: repository root, current branch,
 origin URL, default-branch comparison, status/rebase state, and the diff for
@@ -89,6 +97,15 @@ simple, low-risk asks. It is not consulted to prove Git branch, remote,
 lockfile, or staged-path conditions. Live calibration showed that it is
 appropriately fail-closed but under-confident on composite test/stage/push
 requests; deterministic local checks are more reliable for those cases.
+
+Genuine user messages reserve 75% of the bounded reviewer conversation budget.
+Messages are JSON-quoted data, so embedded speaker labels cannot impersonate
+human instructions. Large messages retain their beginning and end; later user
+restrictions and changed tasks override earlier permission. Truncated/missing scope
+remains uncertainty. No authorization text is persisted.
+
+PR approval is sensitive even under a static allow. The reviewer requires explicit
+human approval intent for the exact PR and prohibits approval on an agent's own behalf.
 
 ## Safety invariants
 

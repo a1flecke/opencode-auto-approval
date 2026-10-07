@@ -428,3 +428,66 @@ describe("trusted-worktree hook order", () => {
     }
   });
 });
+
+
+describe("decision diagnostics", () => {
+  async function run(effect: string, command: string, workflow: any, payload: unknown = { answers: {} }) {
+    const values = new Map<string, unknown>();
+    let evaluate: any;
+    const previousKey = process.env.APPROVAL_TEST_KEY;
+    const previousFetch = globalThis.fetch;
+    let calls = 0;
+    process.env.APPROVAL_TEST_KEY = "test-key";
+    globalThis.fetch = async () => { calls += 1; return Response.json(payload); };
+    try {
+      await createPlugin({ evaluateTrustedWorktree: async () => workflow }).setup({
+        options: { apiKeyEnvVar: "APPROVAL_TEST_KEY" },
+        storage: { async get(key: string) { return values.get(key); }, async set(key: string, value: unknown) { values.set(key, value); } },
+        permission: { async hook(_name: string, handler: any) { evaluate = handler; } },
+        session: { async context() { return [{ type: "user", text: "Inspect the requested status." }]; } },
+      });
+      const event = { sessionID: "session", action: "shell", resources: [command], effect,
+        source: { type: "tool", id: "tool-secret-looking-id" } };
+      await evaluate(event);
+      return { event, values, calls };
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousKey === undefined) delete process.env.APPROVAL_TEST_KEY; else process.env.APPROVAL_TEST_KEY = previousKey;
+    }
+  }
+
+  test("records specific script-integrity refusals and a hashed source identity", async () => {
+    const { values } = await run("allow", "./scripts/check-rules.sh", {
+      kind: "ask", category: "trusted-script", guard: true,
+      reason: "The script's directory has changes or untracked files not in HEAD; review before running.",
+    });
+    const decisions: any = values.get("model-approval:recent-decisions");
+    expect(decisions[0]).toMatchObject({ route: "guard", incomingEffect: "allow", decision: "ask",
+      reasonCode: "trusted-script-directory-dirty", sourceIDHash: expect.any(String) });
+    expect(JSON.stringify(decisions)).not.toContain("tool-secret-looking-id");
+    expect(JSON.stringify(decisions)).not.toContain("check-rules.sh");
+  });
+
+  test("records malformed model output separately from model declines", async () => {
+    const { values } = await run("ask", "date", { kind: "unrecognized" });
+    expect(values.get("model-approval:recent-decisions")).toEqual([expect.objectContaining({
+      route: "reviewer", incomingEffect: "ask", decision: "ask", reasonCode: "reviewer-malformed-output",
+    })]);
+    expect(values.get("model-approval:stats")).toMatchObject({ malformedOutputs: 1, failures: 0 });
+  });
+
+  test("records the safety condition causing a valid model decline", async () => {
+    const answers = Object.fromEntries(["harmless", "privateDataSafe", "trustedIntent", "untrustedCodeSafe", "narrowEffect"]
+      .map((key) => [key, { type: "noul", noul: key === "trustedIntent" ? 0.2 : 1 }]));
+    const { values } = await run("ask", "date", { kind: "unrecognized" }, { answers });
+    expect(values.get("model-approval:recent-decisions")).toEqual([expect.objectContaining({
+      route: "reviewer", reasonCode: "reviewer-trustedIntent-below-threshold",
+    })]);
+  });
+
+  test("a broad static allow still sends PR approval through the reviewer", async () => {
+    const { event, calls } = await run("allow", "gh pr review 7 --approve", { kind: "unrecognized" });
+    expect(calls).toBe(1);
+    expect(event.effect).toBe("ask");
+  });
+});
