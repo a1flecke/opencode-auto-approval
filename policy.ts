@@ -26,6 +26,7 @@ interface SensitiveRule {
 
 const SENSITIVE_RULES: readonly SensitiveRule[] = [
   // PR/issue/repo mutation and lifecycle operations on GitHub.
+  { category: "pr-approve", actions: new Set(["shell"]), pattern: /\bgh\s+pr\s+review\b[^\n]*(?:--approve(?:[=\s]|$)|\s-[A-Za-z]*a[A-Za-z]*(?:\s|$))/i },
   { category: "pr-merge", actions: new Set(["shell"]), pattern: /\bgh\s+pr\s+merge\b/i },
   { category: "pr-close", actions: new Set(["shell"]), pattern: /\bgh\s+pr\s+close\b/i },
   { category: "issue-close-delete", actions: new Set(["shell"]), pattern: /\bgh\s+issue\s+(close|delete)\b/i },

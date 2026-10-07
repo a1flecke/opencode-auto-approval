@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { resolveWorkflowDirectory } from "../workflow-preflight.js";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { evaluateTrustedWorktreeCommand, resolveWorkflowDirectory } from "../workflow-preflight.js";
 
 describe("resolveWorkflowDirectory", () => {
   test("uses the shell request cwd before the session base directory", () => {
@@ -122,5 +122,73 @@ describe("resolveWorkflowDirectory", () => {
         ],
       ),
     ).toBe("/home/user/dev/project/.worktrees/pr-1160-rebase");
+  });
+});
+
+
+describe("scanner-split workflow pipelines", () => {
+  let directory: string;
+  beforeAll(async () => {
+    const { mkdtemp, writeFile, realpath } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    directory = await realpath(await mkdtemp(join(tmpdir(), "approval-preflight-")));
+    const git = async (...args: string[]) => {
+      const process = Bun.spawn(["git", ...args], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+      if (await process.exited !== 0) throw new Error(await new Response(process.stderr).text());
+    };
+    await git("init", "-b", "feature/test");
+    await git("remote", "add", "origin", "https://github.com/example/project.git");
+    await writeFile(join(directory, "fixture.txt"), "fixture\n");
+    await git("add", "--", "fixture.txt");
+    await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture");
+  });
+  afterAll(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  async function evaluate(command: string, resources: string[], sourceID = "shell-current", toolID = sourceID) {
+    return evaluateTrustedWorktreeCommand({ session: {
+      async get() { return { directory }; },
+      async context() { return [{ content: [{ type: "tool", name: "shell", id: toolID,
+        state: { input: { command, workdir: directory } } }] }]; },
+    } }, { sessionID: "session", action: "shell", resources,
+      source: { type: "tool", id: sourceID } }, {
+      trustedRoots: [directory], trustedRemoteHosts: ["github.com"], defaultBranches: ["main", "master"],
+    });
+  }
+
+  test.each([
+    ["./scripts/run-with-mise.sh yarn build | tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -10"]],
+    ["./scripts/run-with-mise.sh yarn build 2>&1 | tail -10", ["./scripts/run-with-mise.sh yarn build 2>&1", "tail -10"]],
+    ["./scripts/run-with-mise.sh yarn build 2>&1 | tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -10"]],
+    ['git ls-remote origin refs/heads/main | grep -E "passed|FAIL" | head -5',
+      ["git ls-remote origin refs/heads/main", 'grep -E "passed|FAIL"', "head -5"]],
+  ])("allows a validated pipeline from the exact source tool: %s", async (command, resources) => {
+    expect(await evaluate(command, resources)).toMatchObject({ kind: "allow" });
+  });
+
+  test.each([
+    ["./scripts/run-with-mise.sh yarn build; tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -10"]],
+    ["./scripts/run-with-mise.sh yarn build && tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -10"]],
+    ["./scripts/run-with-mise.sh yarn build | tail -10; touch output", ["./scripts/run-with-mise.sh yarn build", "tail -10"]],
+    ["./scripts/run-with-mise.sh yarn build | tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -20"]],
+    ["./scripts/run-with-mise.sh yarn build | tail -10", ["./scripts/run-with-mise.sh yarn build", "tail -10", "touch output"]],
+    ["./scripts/run-with-mise.sh yarn build | tail -10 private.txt", ["./scripts/run-with-mise.sh yarn build", "tail -10 private.txt"]],
+    ["./scripts/run-with-mise.sh yarn build | tee output", ["./scripts/run-with-mise.sh yarn build", "tee output"]],
+  ])("keeps unsafe or mismatched scanner requests asking: %s", async (command, resources) => {
+    expect(await evaluate(command, resources)).toMatchObject({ kind: "ask" });
+  });
+
+  test("retains a default-branch push guard through a validated pipeline", async () => {
+    expect(await evaluate("git push origin main | tail -10", ["git push origin main", "tail -10"]))
+      .toMatchObject({ kind: "ask", guard: true });
+  });
+
+  test("does not recover a pipeline from another tool invocation", async () => {
+    expect(await evaluate("./scripts/run-with-mise.sh yarn build | tail -10",
+      ["./scripts/run-with-mise.sh yarn build", "tail -10"], "shell-current", "shell-other"))
+      .toMatchObject({ kind: "ask" });
   });
 });

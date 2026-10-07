@@ -16,7 +16,8 @@
  * Layer 3 of, and how to disable/roll it back.
  */
 
-import { isSensitiveEvenIfAllowed, redact } from "./policy.js";
+import { createHash } from "node:crypto";
+import { isSensitiveEvenIfAllowed } from "./policy.js";
 import { isValidTrustedScriptPath } from "./trusted-worktree.js";
 import { runReviewer, type MinimalPluginContext, type MinimalPermissionEvent } from "./reviewer.js";
 import {
@@ -157,6 +158,7 @@ interface Stats {
   ask: number;
   deny: number;
   failures: number;
+  malformedOutputs: number;
   timeouts: number;
   totalLatencyMs: number;
 }
@@ -164,7 +166,7 @@ interface Stats {
 const STATS_KEY = "model-approval:stats";
 
 function emptyStats(): Stats {
-  return { reviewed: 0, allow: 0, ask: 0, deny: 0, failures: 0, timeouts: 0, totalLatencyMs: 0 };
+  return { reviewed: 0, allow: 0, ask: 0, deny: 0, failures: 0, malformedOutputs: 0, timeouts: 0, totalLatencyMs: 0 };
 }
 
 async function recordOutcome(
@@ -192,7 +194,7 @@ interface DiagnosticEntry {
 const DIAGNOSTICS_KEY = "model-approval:last-errors";
 const MAX_DIAGNOSTICS = 10;
 const RECENT_DECISIONS_KEY = "model-approval:recent-decisions";
-const MAX_RECENT_DECISIONS = 20;
+const MAX_RECENT_DECISIONS = 100;
 
 interface DecisionEntry {
   time: string;
@@ -200,9 +202,25 @@ interface DecisionEntry {
   category: string;
   decision: "allow" | "ask";
   reasonCode: string;
+  route: "guard" | "preflight" | "reviewer";
+  incomingEffect: string;
+  sourceIDHash?: string;
 }
 
-function workflowReasonCode(category: string, reason: string): string {
+function sourceIdentityHash(source: unknown): string | undefined {
+  if (typeof source !== "object" || source === null) return undefined;
+  const id = (source as Record<string, unknown>).id;
+  return typeof id === "string" ? createHash("sha256").update(id).digest("hex") : undefined;
+}
+
+function workflowReasonCode(category: string, reason: string, decision: "allow" | "ask"): string {
+  if (decision === "allow") return `${category}-allowed`;
+  if (reason.includes("directory has changes or untracked files")) return "trusted-script-directory-dirty";
+  if (reason.includes("not tracked by Git")) return "trusted-script-untracked";
+  if (reason.includes("verify the trusted script")) return "trusted-script-probe-failed";
+  if (reason.includes("explicit non-sensitive in-worktree path arguments")) return "trusted-script-arguments-unsupported";
+  if (category === "inspect-remote-feature-branch") return "remote-ref-inspection-unsupported";
+  if (category === "command-shape") return "command-shape-unsupported";
   if (category === "rebase-continue" && reason === "Rebase continuation requires an active rebase.") {
     return "rebase-continuation-requires-active-rebase";
   }
@@ -355,7 +373,8 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
               action: event.action,
               category: guard.category,
               decision: "ask",
-              reasonCode: workflowReasonCode(guard.category, guard.reason),
+              reasonCode: workflowReasonCode(guard.category, guard.reason, "ask"),
+              route: "guard", incomingEffect: minimalEvent.effect, sourceIDHash: sourceIdentityHash(event.source),
             });
             await recordOutcome(ctx.storage, (s) => {
               s.reviewed += 1;
@@ -402,7 +421,8 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
               action: event.action,
               category: workflow.category,
               decision: workflow.kind,
-              reasonCode: workflowReasonCode(workflow.category, workflow.reason),
+              reasonCode: workflowReasonCode(workflow.category, workflow.reason, workflow.kind),
+              route: "preflight", incomingEffect: minimalEvent.effect, sourceIDHash: sourceIdentityHash(event.source),
             });
             await recordOutcome(ctx.storage, (s) => {
               s.reviewed += 1;
@@ -422,6 +442,17 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
         // permanent deny: uncertainty is explicitly surfaced to the user.
         event.effect = review.decision;
         event.message = review.reason;
+        await recordDecision(ctx.storage, {
+          action: event.action, category: sensitivity.category ?? "model-review", decision: review.decision,
+          reasonCode: review.reasonCode, route: "reviewer", incomingEffect: minimalEvent.effect,
+          sourceIDHash: sourceIdentityHash(event.source),
+        });
+        if (review.reasonCode === "reviewer-malformed-output") {
+          await recordDiagnostic(ctx.storage, {
+            time: new Date().toISOString(), action: event.action, sensitiveCategory: sensitivity.category ?? "n/a",
+            kind: "malformed-output", detail: "Reviewer returned an incomplete or malformed assessment.",
+          });
+        }
         if (options.debug) {
           console.error(
             `[model-approval] action=${event.action} sensitive=${sensitivity.category ?? "n/a"} incoming=${minimalEvent.effect} decision=${review.decision} latencyMs=${latencyMs} reason=${review.reason}`,
@@ -430,6 +461,7 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
         await recordOutcome(ctx.storage, (s) => {
           s.reviewed += 1;
           s.totalLatencyMs += latencyMs;
+          if (review.reasonCode === "reviewer-malformed-output") s.malformedOutputs = (s.malformedOutputs ?? 0) + 1;
           if (review.decision === "allow") s.allow += 1;
           else s.ask += 1;
         });
@@ -448,10 +480,13 @@ export function createPlugin(dependencies: PluginDependencies = {}) {
         // malformed-output branch above: a silent reviewer failure that
         // always falls back to ask is safe, but invisible, and would have
         // made this exact bug class impossible to diagnose.
-        const errorDetail =
-          err instanceof Error
-            ? `${err.name}: ${redact(err.message)}${err.stack ? `\n${redact(err.stack).slice(0, 800)}` : ""}`
-            : redact(String(err));
+        const status = err instanceof Error ? err.message.match(/HTTP (\d{3})/)?.[1] : undefined;
+        const reasonCode = keyMissing ? "reviewer-key-missing" : timedOut ? "reviewer-timeout" : status ? `reviewer-http-${status}` : "reviewer-exception";
+        const errorDetail = reasonCode;
+        await recordDecision(ctx.storage, {
+          action: event.action, category: sensitivity.category ?? "model-review", decision: "ask", reasonCode,
+          route: "reviewer", incomingEffect: minimalEvent.effect, sourceIDHash: sourceIdentityHash(event.source),
+        });
         console.error(
           `[model-approval] reviewer error action=${event.action} sensitive=${sensitivity.category ?? "n/a"} latencyMs=${latencyMs} timedOut=${timedOut}: ${errorDetail}`,
         );

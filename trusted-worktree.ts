@@ -315,21 +315,15 @@ function commandFamily(command: string, metadata: WorktreeMetadata, options: Tru
   if (tokens[0] === "git" && tokens[1] === "rebase") return ask("rebase-origin-main", "Only an exact rebase onto origin/main is automatic.");
 
   if (tokens[0] === "git" && tokens[1] === "ls-remote") {
-    const isRemoteRefInspection =
-      tokens.length === 4 &&
-      tokens[2] === "origin" &&
-      (tokens[3] === `refs/heads/${metadata.branch}` ||
-        options.defaultBranches.some((b) => tokens[3] === b || tokens[3] === `refs/heads/${b}`));
+    const words = shellWords(command);
+    const refs = words?.slice(3) ?? [];
+    const isRemoteRefInspection = words?.[2] === "origin" && refs.length >= 1 && refs.length <= 4 &&
+      refs.every((ref) => ref === `refs/heads/${metadata.branch}` ||
+        options.defaultBranches.some((branch) => ref === branch || ref === `refs/heads/${branch}`));
     return isRemoteRefInspection
-      ? {
-          kind: "allow",
-          category: "inspect-remote-feature-branch",
-          reason: "Read-only inspection of the current feature branch or a default branch on the trusted origin.",
-        }
-      : ask(
-          "inspect-remote-feature-branch",
-          "Automatic remote inspection is limited to the current feature branch or a default branch on origin.",
-        );
+      ? { kind: "allow", category: "inspect-remote-feature-branch",
+          reason: "Read-only inspection of explicit current or default branch refs on the trusted origin." }
+      : ask("inspect-remote-feature-branch", "Automatic remote inspection accepts one to four explicit current or default branch refs on origin.");
   }
 
   if (tokens[0] === "git" && tokens[1] === "push") {
@@ -470,6 +464,10 @@ export function evaluateTrustedWorkflow(
 ): WorkflowDecision {
   const normalized = canonicalWrapperSpelling(command.trim());
   if (normalized.length === 0) return { kind: "unrecognized" };
+
+  if (/^git ls-remote\s/.test(normalized) && /\s2>&1$/.test(normalized) && !normalized.replace(/\s2>&1$/, "").includes("2>&1")) {
+    return evaluateTrustedWorkflow(normalized.replace(/\s2>&1$/, ""), metadata, options);
+  }
 
   const split = splitOutputFilters(normalized);
   if (split.kind === "filtered") {

@@ -1,5 +1,7 @@
 /** Runtime adapter for deterministic trusted-worktree permission decisions. */
 
+import { splitOutputFilters } from "./output-filters.js";
+import { shellWords } from "./shell-words.js";
 import { bunPathExists, loadWorktreeMetadata, runBunReadOnly } from "./git-metadata.js";
 import {
   evaluateTrustedWorkflowBatch,
@@ -72,36 +74,50 @@ function sourceToolID(value: unknown): string | null {
   return source.type === "tool" && typeof source.id === "string" && source.id.length > 0 ? source.id : null;
 }
 
-function sourceToolDirectory(event: WorkflowPreflightEvent, messages: ReadonlyArray<SessionToolMessage>): string | null {
+function sourceToolInput(event: WorkflowPreflightEvent, messages: ReadonlyArray<SessionToolMessage>): Record<string, unknown> | null {
   const toolID = sourceToolID(event.source);
   if (!toolID) return null;
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const content = messages[messageIndex]?.content;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const content = messages[i]?.content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (typeof part !== "object" || part === null || Array.isArray(part)) continue;
       const tool = part as Record<string, unknown>;
-      if (tool.type !== "tool" || tool.id !== toolID) continue;
+      if (tool.type !== "tool" || tool.id !== toolID || (tool.name !== undefined && tool.name !== "shell")) continue;
       const state = tool.state;
-      if (typeof state !== "object" || state === null || Array.isArray(state)) continue;
+      if (typeof state !== "object" || state === null || Array.isArray(state)) return null;
       const input = (state as Record<string, unknown>).input;
-      if (typeof input !== "object" || input === null || Array.isArray(input)) continue;
-      const shellInput = input as Record<string, unknown>;
-      // OpenCode's actual shell tool input field is "workdir", not "cwd" or
-      // "directory" (confirmed from a live recorded tool call: `{ command,
-      // timeout, workdir }`). Checking only the other two names meant this
-      // branch never matched in practice, and every trusted-workflow command
-      // silently fell back to the stale session directory instead.
-      const toolDirectory =
-        absoluteDirectory(shellInput.cwd) ?? absoluteDirectory(shellInput.directory) ?? absoluteDirectory(shellInput.workdir);
-      if (toolDirectory) return toolDirectory;
-      const command = shellInput.command;
-      if (typeof command !== "string") continue;
-      const match = command.match(/^cd\s+(\/[^\s;&|`$]+)\s+&&\s+/);
-      return match ? absoluteDirectory(match[1]) : null;
+      return typeof input === "object" && input !== null && !Array.isArray(input)
+        ? input as Record<string, unknown> : null;
     }
   }
   return null;
+}
+
+function sourceToolDirectory(event: WorkflowPreflightEvent, messages: ReadonlyArray<SessionToolMessage>): string | null {
+  const input = sourceToolInput(event, messages);
+  if (!input) return null;
+  const directory = absoluteDirectory(input.cwd) ?? absoluteDirectory(input.directory) ?? absoluteDirectory(input.workdir);
+  if (directory) return directory;
+  const match = typeof input.command === "string" ? input.command.match(/^cd\s+(\/[^\s;&|`$]+)\s+&&\s+/) : null;
+  return match ? absoluteDirectory(match[1]) : null;
+}
+
+/** Bind scanner resources to the exact source pipeline; never infer operators from a resource list. */
+function workflowCommands(event: WorkflowPreflightEvent, messages: ReadonlyArray<SessionToolMessage>): readonly string[] {
+  if (event.resources.length < 2) return event.resources;
+  const command = sourceToolInput(event, messages)?.command;
+  if (typeof command !== "string") return event.resources;
+  const split = splitOutputFilters(command);
+  if (split.kind !== "filtered") return event.resources;
+  const expected = [split.command, ...split.filters];
+  if (expected.length !== event.resources.length) return event.resources;
+  const matches = expected.every((segment, i) => {
+    const resource = i === 0 ? event.resources[i].trim().replace(/\s2>&1$/, "") : event.resources[i];
+    const words = shellWords(resource);
+    return words !== null && JSON.stringify(words) === JSON.stringify(shellWords(segment));
+  });
+  return matches ? [command] : event.resources;
 }
 
 /**
@@ -138,15 +154,15 @@ export async function evaluateTrustedWorktreeCommand(
   if (event.action !== "shell") return { kind: "unrecognized" };
   const processCheck = evaluateRoutineProcessCheck(event.resources);
   if (processCheck.kind !== "unrecognized") return processCheck;
-  const candidates = event.resources.filter((command) => isTrustedWorkflowCandidate(command, options));
-  if (candidates.length === 0) return { kind: "unrecognized" };
-  if (event.resources.length !== candidates.length) {
-    return ask("command-shape", "Automatic workflow approval cannot mix workflow commands with other shell operations.");
-  }
-
+  if (!event.resources.some((command) => isTrustedWorkflowCandidate(command, options))) return { kind: "unrecognized" };
   try {
-    const info = await ctx.session?.get?.({ sessionID: event.sessionID });
     const messages = (await ctx.session?.context?.({ sessionID: event.sessionID })) ?? [];
+    const commands = workflowCommands(event, messages);
+    const candidates = commands.filter((command) => isTrustedWorkflowCandidate(command, options));
+    if (commands.length !== candidates.length) {
+      return ask("command-shape", "Automatic workflow approval cannot mix workflow commands with other shell operations.");
+    }
+    const info = await ctx.session?.get?.({ sessionID: event.sessionID });
     const directory = resolveWorkflowDirectory(event, info, messages);
     if (!directory) return ask("trusted-worktree", "Could not resolve the session worktree for automatic approval.");
     const metadata = await loadWorktreeMetadata(

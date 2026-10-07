@@ -101,3 +101,15 @@ describe("redact", () => {
     expect(redact(text)).toBe(text);
   });
 });
+
+
+describe("PR approval classification", () => {
+  test.each(["gh pr review 7 --approve", "gh pr review --approve 7", "gh pr review 7 -a"]) (
+    "reviews approval even when a broad static rule allows it: %s", (command) => {
+      expect(isSensitiveEvenIfAllowed("shell", [command])).toEqual({ sensitive: true, category: "pr-approve" });
+    });
+  test.each(["gh pr review 7 --comment", "gh pr view 7", "gh pr review 7 --request-changes"])(
+    "does not classify ordinary inspection or feedback as approval: %s", (command) => {
+      expect(isSensitiveEvenIfAllowed("shell", [command]).sensitive).toBe(false);
+    });
+});
