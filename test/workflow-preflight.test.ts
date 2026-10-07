@@ -128,13 +128,24 @@ describe("resolveWorkflowDirectory", () => {
 
 describe("scanner-split workflow pipelines", () => {
   let directory: string;
+  const hookGitEnvironment: Record<string, string> = {};
   beforeAll(async () => {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("GIT_") && process.env[key] !== undefined) {
+        hookGitEnvironment[key] = process.env[key]!;
+        delete process.env[key];
+      }
+    }
     const { mkdtemp, writeFile, realpath } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     directory = await realpath(await mkdtemp(join(tmpdir(), "approval-preflight-")));
+    // Git hooks export repository selectors. Every fixture mutation must target
+    // its disposable repository explicitly, regardless of the parent hook.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
     const git = async (...args: string[]) => {
-      const process = Bun.spawn(["git", ...args], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+      const process = Bun.spawn(["git", ...args], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
       if (await process.exited !== 0) throw new Error(await new Response(process.stderr).text());
     };
     await git("init", "-b", "feature/test");
@@ -145,7 +156,8 @@ describe("scanner-split workflow pipelines", () => {
   });
   afterAll(async () => {
     const { rm } = await import("node:fs/promises");
-    await rm(directory, { recursive: true, force: true });
+    if (directory) await rm(directory, { recursive: true, force: true });
+    Object.assign(process.env, hookGitEnvironment);
   });
 
   async function evaluate(command: string, resources: string[], sourceID = "shell-current", toolID = sourceID) {
